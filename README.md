@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # UtenCore
 
 A universal stack-based virtual machine for scripting language compilers. Written in Rust.
@@ -165,3 +166,6 @@ cargo test --lib
 ## License
 
 MPL-2.0. See LICENSE file for details.
+=======
+# utencore
+>>>>>>> 3881ef367f10366b2d392aa2565583b1f47123bf
