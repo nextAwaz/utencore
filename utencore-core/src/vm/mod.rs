@@ -23,7 +23,7 @@ pub mod call;
 pub mod gc;
 pub mod ns;
 pub mod unsafe_;
-pub mod stdlib;
+pub mod builtins;
 
 #[derive(Debug, Clone)]
 pub struct VmConfig {
@@ -850,11 +850,11 @@ impl Vm {
             }
 
             // ── Register native utencore.* functions ──
-            let stdlib_funcs = stdlib::register_all(self);
+            let builtin_funcs = builtins::register_all(self);
             let mid_usize = mid as usize;
             let mut sub_ns: std::collections::HashMap<String, Vec<(StringId, UValue)>> =
                 std::collections::HashMap::new();
-            for (ns_name, func_name, idx, _n_params) in &stdlib_funcs {
+            for (ns_name, func_name, idx, _n_params) in &builtin_funcs {
                 let func_name_sid = self.modules[mid_usize].module.intern(func_name);
                 if ns_name == "utencore" {
                     // Export directly: utencore.print, utencore.input, etc.
