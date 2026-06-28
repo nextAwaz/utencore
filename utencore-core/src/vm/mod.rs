@@ -12,6 +12,15 @@ use crate::plugin::PluginManager;
 use utencore_types::*;
 use utencore_types::BYTECODE_VERSION;
 
+/// Embedded UCSL standard library modules (compiled into the VM binary).
+/// These are registered at VM startup so `import math` etc. work out of the box
+/// without needing separate .uclib files in the filesystem.
+const EMBEDDED_UCSL: &[(&str, &[u8])] = &[
+    ("math", include_bytes!("../../../ucsl/utenstd/math.uclib")),
+    ("io",   include_bytes!("../../../ucsl/utenstd/io.uclib")),
+    ("sys",  include_bytes!("../../../ucsl/utenstd/sys.uclib")),
+];
+
 /// A VM-native function — Rust closure callable from bytecode.
 /// Uses a newtype struct so the compiler doesn't confuse the type with bare Arc.
 #[derive(Clone)]
@@ -112,6 +121,7 @@ impl Vm {
     pub fn new() -> Self {
         let mut vm = Vm::with_config(VmConfig::default());
         vm.init_unsafe_module();
+        vm.init_embedded_stdlib();
         vm
     }
 
@@ -879,6 +889,29 @@ impl Vm {
                     short_name,
                     UValue::Gc(ns_handle, ValueTag::Namespace),
                 );
+            }
+        }
+    }
+
+    /// Load embedded UCSL standard library modules into the VM at startup.
+    /// Each module is deserialized from its compiled-in `.uclib` bytes, loaded,
+    /// initialized, and registered by name so `import math` etc. always work
+    /// without requiring separate files in the filesystem.
+    pub fn init_embedded_stdlib(&mut self) {
+        for (name, data) in EMBEDDED_UCSL {
+            match crate::bytecode::UtenModule::from_bytes(data) {
+                Ok(module) => {
+                    let bytecode_ver = module.bytecode_version;
+                    match self.load_module(module) {
+                        Ok(mid) => {
+                            self.run_module_init(mid).ok();
+                            self.loader.register_loaded(name, mid as usize);
+                            log::info!("embedded stdlib '{}' (v{}) loaded OK", name, bytecode_ver);
+                        }
+                        Err(e) => log::warn!("embedded stdlib '{}' load failed: {e}", name),
+                    }
+                }
+                Err(e) => log::warn!("embedded stdlib '{}' deserialize failed: {e}", name),
             }
         }
     }
