@@ -304,16 +304,6 @@ impl Vm {
             FDiv => { let r = self.binary_float_op(|a, b| a / b)?; self.stack.push(UValue::Float64(r)); }
             FMod => { let r = self.binary_float_op(|a, b| a % b)?; self.stack.push(UValue::Float64(r)); }
             FNeg => { let v = self.pop_float()?; self.stack.push(UValue::Float64(-v)); }
-            FPow => { let b = self.pop_float()?; let a = self.pop_float()?; self.stack.push(UValue::Float64(a.powf(b))); }
-            FSqrt => { let v = self.pop_float()?; self.stack.push(UValue::Float64(v.sqrt())); }
-            FAbs => { let v = self.pop_float()?; self.stack.push(UValue::Float64(v.abs())); }
-            FFloor => { let v = self.pop_float()?; self.stack.push(UValue::Float64(v.floor())); }
-            FCeil => { let v = self.pop_float()?; self.stack.push(UValue::Float64(v.ceil())); }
-            FRound => { let v = self.pop_float()?; self.stack.push(UValue::Float64(v.round())); }
-            FSin => { let v = self.pop_float()?; self.stack.push(UValue::Float64(v.sin())); }
-            FCos => { let v = self.pop_float()?; self.stack.push(UValue::Float64(v.cos())); }
-            FTan => { let v = self.pop_float()?; self.stack.push(UValue::Float64(v.tan())); }
-            FAtan2 => { let b = self.pop_float()?; let a = self.pop_float()?; self.stack.push(UValue::Float64(a.atan2(b))); }
 
             // ── 0x30–0x3F: Bitwise ──
             BitAnd => { let b = self.pop_int()?; let a = self.pop_int()?; self.stack.push(UValue::Int64(a & b)); }
@@ -322,16 +312,6 @@ impl Vm {
             BitNot => { let v = self.pop_int()?; self.stack.push(UValue::Int64(!v)); }
             Shl => { let b = self.pop_uint()?; let a = self.pop_int()?; self.stack.push(UValue::Int64(a.wrapping_shl(b as u32))); }
             Shr => { let b = self.pop_uint()?; let a = self.pop_int()?; self.stack.push(UValue::Int64(a.wrapping_shr(b as u32))); }
-            UShr => { let b = self.pop_uint()?; let a = self.pop_uint()?; self.stack.push(UValue::Int64((a.wrapping_shr(b as u32)) as i64)); }
-            RotLeft => { let b = self.pop_uint()?; let a = self.pop_int()?; self.stack.push(UValue::Int64(a.rotate_left(b as u32))); }
-            RotRight => { let b = self.pop_uint()?; let a = self.pop_int()?; self.stack.push(UValue::Int64(a.rotate_right(b as u32))); }
-            PopCount => { let v = self.pop_uint()?; self.stack.push(UValue::Int64(v.count_ones() as i64)); }
-            LeadingZeros => { let v = self.pop_uint()?; self.stack.push(UValue::Int64(v.leading_zeros() as i64)); }
-            TrailingZeros => { let v = self.pop_uint()?; self.stack.push(UValue::Int64(v.trailing_zeros() as i64)); }
-            ByteSwap => { let v = self.pop_uint()?; self.stack.push(UValue::Int64(v.swap_bytes() as i64)); }
-            BitReverse => { let v = self.pop_uint()?; self.stack.push(UValue::Int64(v.reverse_bits() as i64)); }
-            UDiv => { let b = self.pop_uint()?; let a = self.pop_uint()?; if b != 0 { self.stack.push(UValue::Int64((a / b) as i64)); } else { return Err(UtenError::Vm("division by zero".into())); } }
-            UMod => { let b = self.pop_uint()?; let a = self.pop_uint()?; if b != 0 { self.stack.push(UValue::Int64((a % b) as i64)); } else { return Err(UtenError::Vm("mod by zero".into())); } }
 
             // ── 0x40–0x4F: Comparison ──
             Eq => {
@@ -433,10 +413,7 @@ impl Vm {
             And => { let b = self.pop()?.truthy(); let a = self.pop()?.truthy(); self.stack.push(UValue::Bool(a && b)); }
             Or => { let b = self.pop()?.truthy(); let a = self.pop()?.truthy(); self.stack.push(UValue::Bool(a || b)); }
             Not => { let v = self.pop()?; self.stack.push(UValue::Bool(!v.truthy())); }
-            Xor => { let b = self.pop()?.truthy(); let a = self.pop()?.truthy(); self.stack.push(UValue::Bool(a ^ b)); }
-            Truthy => { let v = self.pop()?; self.stack.push(UValue::Bool(v.truthy())); }
             TypeOf => { let v = self.peek(0)?; self.stack.push(UValue::Int32(v.tag() as i32)); }
-            IsType => { let tag_val = self.pop_int()?; let v = self.pop()?; self.stack.push(UValue::Bool(v.tag() as i32 == tag_val as i32)); }
 
             // ── 0x60–0x6F: Conversion ──
             ToI32 => { let v = self.pop_int()?; self.stack.push(UValue::Int32(v as i32)); }
@@ -645,8 +622,6 @@ impl Vm {
             }
 
             // ── 0xA0–0xAF: Async ──
-            Await => { self.stack.push(UValue::Nil); }
-            AsyncCall => { let func_ref = operand as FuncRef; self.call_function(func_ref)?; }
 
             // ── 0xB0–0xBF: Function Calls ──
             Call => { let func_ref = operand as FuncRef; self.check_recursion()?; self.call_depth += 1; self.call_function(func_ref)?; }
@@ -755,8 +730,6 @@ impl Vm {
                     _ => self.stack.push(UValue::Nil),
                 }
             }
-            Invoke => { let nargs = operand as usize; for _ in 0..nargs { self.pop()?; } self.pop()?; self.stack.push(UValue::Nil); }
-            SuperCall => { let _obj = self.pop()?; self.stack.push(UValue::Nil); }
             Apply => {
                 let args_arr = self.pop()?;
                 let func_val = self.pop()?;
@@ -1010,18 +983,10 @@ impl Vm {
             // ── 0xE0–0xEF: Variables / Locals ──
             LoadLocal => { let idx = operand as u16; let frame = self.frames.last().unwrap(); let val = frame.locals.get(idx as usize).unwrap_or(&UValue::Nil).clone(); self.stack.push(val); }
             StoreLocal => { let idx = operand as u16; let val = self.pop()?; if let Some(frame) = self.frames.last_mut() { if (idx as usize) < frame.locals.len() { frame.locals[idx as usize] = val; } } }
-            LoadCapture => { let idx = operand as u8 as usize; let frame = self.frames.last().unwrap(); let val = frame.captures.get(idx).cloned().unwrap_or(UValue::Nil); self.stack.push(val); }
-            StoreCapture => { let idx = operand as u8 as usize; let val = self.pop()?; if let Some(frame) = self.frames.last_mut() { if idx < frame.captures.len() { frame.captures[idx] = val; } } }
             LoadGlobal => { let idx = operand as u16; let mid = self.current_module_id(); if (idx as usize) < self.modules[mid].globals.len() { self.stack.push(self.modules[mid].globals[idx as usize].clone()); } else { self.stack.push(UValue::Nil); } }
             StoreGlobal => { let idx = operand as u16; let val = self.pop()?; let mid = self.current_module_id(); if (idx as usize) >= self.modules[mid].globals.len() { self.modules[mid].globals.resize(idx as usize + 16, UValue::Nil); } self.modules[mid].globals[idx as usize] = val; }
-            LoadDynGlobal => { let name_id = operand as StringId; let mid = self.current_module_id(); let name = self.modules[mid].module.strings.get(name_id as usize).cloned().unwrap_or_default(); let g = &self.modules[mid].module.globals; let pos = g.iter().position(|gd| gd.name == name); let val = pos.and_then(|i| self.modules[mid].globals.get(i)).cloned().unwrap_or(UValue::Nil); self.stack.push(val); }
-            StoreDynGlobal => { let name_id = operand as StringId; let val = self.pop()?; let mid = self.current_module_id(); let name = self.modules[mid].module.strings.get(name_id as usize).cloned().unwrap_or_default(); let g = &self.modules[mid].module.globals; let pos = g.iter().position(|gd| gd.name == name); if let Some(i) = pos { if i < self.modules[mid].globals.len() { self.modules[mid].globals[i] = val; } } }
             AllocFrame => { if let Some(frame) = self.frames.last_mut() { let n = operand as usize; if n > self.config.frame_size as usize { return Err(UtenError::Vm(format!("frame size {n} exceeds limit {}", self.config.frame_size))); } frame.locals.resize(n, UValue::Nil); } }
             LoadArg => { let idx = operand as u8 as usize; let frame = self.frames.last().unwrap(); let val = frame.locals.get(idx).unwrap_or(&UValue::Nil).clone(); self.stack.push(val); }
-            LoadModuleVar => { let idx = operand as u16; let mid = self.current_module_id(); let val = self.modules[mid].globals.get(idx as usize).cloned().unwrap_or(UValue::Nil); self.stack.push(val); }
-            StoreModuleVar => { let idx = operand as u16; let val = self.pop()?; let mid = self.current_module_id(); if (idx as usize) < self.modules[mid].globals.len() { self.modules[mid].globals[idx as usize] = val; } }
-            LoadUpvalueFrom => { let _idx = operand as u8 as usize; if self.frames.len() >= 2 { let parent = &self.frames[self.frames.len() - 2]; let val = parent.captures.get(0).cloned().unwrap_or(UValue::Nil); self.stack.push(val); } else { self.stack.push(UValue::Nil); } }
-            StoreUpvalueTo => { let _idx = operand as u8 as usize; let val = self.pop()?; if self.frames.len() >= 2 { let parent_idx = self.frames.len() - 2; let parent = &mut self.frames[parent_idx]; if !parent.captures.is_empty() { parent.captures[0] = val; } } }
             This => { if let Some(frame) = self.frames.last() { let val = frame.locals.first().cloned().unwrap_or(UValue::Nil); self.stack.push(val); } else { self.stack.push(UValue::Nil); } }
             ArgCount => { let n = self.frames.last().map(|f| f.locals.len()).unwrap_or(0); self.stack.push(UValue::Int32(n as i32)); }
 
@@ -1096,11 +1061,7 @@ impl Vm {
             StrReplace => { let mid = self.current_module_id(); let replacement = self.pop()?; let pattern = self.pop()?; let v = self.pop()?; match v { UValue::String(sid) => { let s = self.modules[mid].module.strings[sid as usize].clone(); let pat = self.value_to_string(&pattern); let repl = self.value_to_string(&replacement); let result = s.replace(&pat, &repl); let new_sid = self.modules[mid].module.intern(&result); self.stack.push(UValue::String(new_sid)); } _ => self.stack.push(UValue::Nil), } }
             StrSplit => { let mid = self.current_module_id(); let delim = self.pop()?; let v = self.pop()?; match v { UValue::String(sid) => { let s = self.modules[mid].module.strings[sid as usize].clone(); let d = self.value_to_string(&delim); let parts: Vec<UValue> = s.split(&d).map(|p| UValue::String(self.modules[mid].module.intern(p))).collect(); self.stack.push(UValue::Gc(self.gc.alloc(HeapObject::Array(parts)), ValueTag::Array)); } _ => self.stack.push(UValue::Nil), } }
             StrJoin => { let sep = self.pop()?; let arr_val = self.pop()?; let mid = self.current_module_id(); let sep_str = self.value_to_string(&sep); let parts = match arr_val { UValue::Gc(h, _) => match self.gc.get(h) { HeapObject::Array(arr) => arr.iter().map(|v| self.value_to_string(v)).collect::<Vec<_>>(), _ => vec![], }, _ => vec![], }; let result = parts.join(&sep_str); let sid = self.modules[mid].module.intern(&result); self.stack.push(UValue::String(sid)); }
-            StrToUpper => { let mid = self.current_module_id(); let v = self.pop()?; match v { UValue::String(sid) => { let s = &self.modules[mid].module.strings[sid as usize]; let upper = s.to_uppercase(); let new_sid = self.modules[mid].module.intern(&upper); self.stack.push(UValue::String(new_sid)); } _ => self.stack.push(v), } }
-            StrToLower => { let mid = self.current_module_id(); let v = self.pop()?; match v { UValue::String(sid) => { let s = &self.modules[mid].module.strings[sid as usize]; let lower = s.to_lowercase(); let new_sid = self.modules[mid].module.intern(&lower); self.stack.push(UValue::String(new_sid)); } _ => self.stack.push(v), } }
-            StrTrim => { let mid = self.current_module_id(); let v = self.pop()?; match v { UValue::String(sid) => { let s = self.modules[mid].module.strings[sid as usize].clone(); let trimmed = s.trim().to_string(); let new_sid = self.modules[mid].module.intern(&trimmed); self.stack.push(UValue::String(new_sid)); } _ => self.stack.push(v), } }
             StrCmp => { let b = self.pop()?; let a = self.pop()?; let a_str = self.value_to_string(&a); let b_str = self.value_to_string(&b); self.stack.push(UValue::Int32(a_str.cmp(&b_str) as i32)); }
-            StrFormat => { let v = self.pop()?; let fmt_val = self.pop()?; let fmt = self.value_to_string(&fmt_val); let val = self.value_to_string(&v); let result = fmt.replacen("%s", &val, 1).replacen("%d", &val, 1).replacen("%f", &val, 1); let mid = self.current_module_id(); let sid = self.modules[mid].module.intern(&result); self.stack.push(UValue::String(sid)); }
             // ── Regex operations ──
             RegexCompile => {
                 let s = self.pop()?;
@@ -1808,11 +1769,6 @@ impl Vm {
                 // For now, pause and let the user inspect via Trace.
                 self.running = false;
             }
-            Line => {
-                // Source line marker — updates current line for debug info.
-                // No runtime effect; the line number is in the operand for stack traces.
-                // (Line mapping is already stored in module.header.line_map)
-            }
 
             // ── CIB opcodes (0xE0–0xEB) ──
             CibLoad => {
@@ -1915,16 +1871,6 @@ impl Vm {
                     }
                 }
             }
-            CibFree => {
-                let mid = self.current_module_id();
-                let name_sid = operand as StringId;
-                let name = self.modules[mid].module.strings.get(name_sid as usize)
-                    .cloned().unwrap_or_default();
-                if let Err(e) = self.cib.unload_library(&name) {
-                    eprintln!("CIB: failed to unload '{name}': {e}");
-                }
-                self.stack.push(UValue::Nil);
-            }
             CibWrap => {
                 let ptr_val = self.pop_int()?;
                 let mid = self.current_module_id();
@@ -2003,16 +1949,7 @@ impl Vm {
                     }
                 }
             }
-            CibStructPack => {
                 // Pop: struct_name_sid, nfields, then pairs of (field_name_sid, value)
-                // Push: packed bytes as GC Bytes object
-                let _struct_name_sid = operand as StringId;
-                let val = self.pop()?;
-                // For now, just push the input value through as a Bytes wrapper.
-                // Full implementation needs struct layout lookup + field marshalling.
-                let bytes = self.value_to_string(&val).into_bytes();
-                self.stack.push(UValue::Gc(self.gc.alloc(HeapObject::Bytes(bytes)), ValueTag::Bytes));
-            }
 
             Export => {
                 // Language-agnostic export: pop a value and register it in the

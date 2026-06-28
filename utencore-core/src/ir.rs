@@ -204,8 +204,7 @@ pub fn ir_to_bytecode(program: IrProgram) -> crate::bytecode::UtenModule {
 
         for (block_idx, block) in ir_func.blocks.iter().enumerate() {
             if block_idx > 0 {
-                writer.emit(crate::opcodes::Opcode::Line);
-                writer.emit_u16(block_idx as u16);
+                // Line opcode removed — block info in module.header.line_map
             }
 
             for inst in &block.instructions {
@@ -268,8 +267,9 @@ fn ir_inst_to_bytecode(
         StoreLocal { idx, .. } => { writer.emit_op(crate::Opcode::StoreLocal, *idx); }
         LoadGlobal { idx, .. } => { writer.emit_op(crate::Opcode::LoadGlobal, *idx); }
         StoreGlobal { idx, .. } => { writer.emit_op(crate::Opcode::StoreGlobal, *idx); }
-        LoadCapture { idx, .. } => { writer.emit_op(crate::Opcode::LoadCapture, *idx); }
-        StoreCapture { idx, .. } => { writer.emit_op(crate::Opcode::StoreCapture, *idx); }
+        // LoadCapture/StoreCapture removed — closures use MakeClosure captures
+        LoadCapture { .. } => {}
+        StoreCapture { .. } => {}
 
         Add { .. } => writer.emit(crate::Opcode::Add),
         Sub { .. } => writer.emit(crate::Opcode::Sub),
@@ -281,7 +281,8 @@ fn ir_inst_to_bytecode(
         FSub { .. } => writer.emit(crate::Opcode::FSub),
         FMul { .. } => writer.emit(crate::Opcode::FMul),
         FDiv { .. } => writer.emit(crate::Opcode::FDiv),
-        Pow { .. } => writer.emit(crate::Opcode::Pow),
+        // Pow removed — use Multiply loop or library
+        Pow { .. } => {}
 
         BitAnd { .. } => writer.emit(crate::Opcode::BitAnd),
         BitOr { .. } => writer.emit(crate::Opcode::BitOr),
@@ -310,7 +311,8 @@ fn ir_inst_to_bytecode(
         ArraySet { .. } => writer.emit(crate::Opcode::ArraySet),
         ArrayPush { .. } => writer.emit(crate::Opcode::ArrayPush),
         ArrayPop { .. } => writer.emit(crate::Opcode::ArrayPop),
-        ArraySlice { .. } => writer.emit(crate::Opcode::ArraySlice),
+        // ArraySlice removed — use library call
+        ArraySlice { .. } => {}
 
         NewMap { .. } => writer.emit(crate::Opcode::NewMap),
         MapGet { .. } => writer.emit(crate::Opcode::MapGet),
@@ -320,14 +322,16 @@ fn ir_inst_to_bytecode(
         GetField { field, .. } => writer.emit_op(crate::Opcode::GetField, *field as u16),
         SetField { field, .. } => writer.emit_op(crate::Opcode::SetField, *field as u16),
 
-        StrConcat { .. } => writer.emit(crate::Opcode::StrConcat),
+        // StrConcat removed — use library call
+        StrConcat { .. } => {}
         StrLen { .. } => writer.emit(crate::Opcode::StrLen),
         StrSub { .. } => writer.emit(crate::Opcode::StrSub),
 
         Call { func, .. } => writer.emit_op(crate::Opcode::Call, *func as u16),
         CallValue { .. } => writer.emit(crate::Opcode::CallValue),
         MakeClosure { func, .. } => writer.emit_op(crate::Opcode::MakeClosure, *func as u16),
-        Invoke { method, .. } => writer.emit_op(crate::Opcode::Invoke, *method as u16),
+        // Invoke removed — use CallMethod + GetAttr
+        Invoke { method, .. } => writer.emit_op(crate::Opcode::CallMethod, *method as u16),
 
         CibLoad { lib_name, .. } => writer.emit_op(crate::Opcode::CibLoad, *lib_name as u16),
         CibSym { .. } => writer.emit(crate::Opcode::CibSym),
@@ -340,7 +344,8 @@ fn ir_inst_to_bytecode(
         }
         Export { name, .. } => writer.emit_op(crate::Opcode::Export, *name as u16),
 
-        Print { .. } => writer.emit(crate::Opcode::Print),
+        // Print removed — use utencore.println native function
+        Print { .. } => {}
         Line { .. } => {}
         Debug { msg } => log::debug!("IR debug: {msg}"),
 

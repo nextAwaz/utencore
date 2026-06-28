@@ -19,7 +19,7 @@ pub use opcodes::*;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Bytecode format version (independent of VM version).
-pub const BYTECODE_VERSION: u32 = 2;
+pub const BYTECODE_VERSION: u32 = 3;
 
 /// Magic bytes for .uclib files: "UCLB" (UtenCore Library)
 pub const UCLIB_MAGIC: &[u8; 4] = b"UCLB";

@@ -376,7 +376,7 @@ fn expr(e: &Expr, c: &mut Ctx) {
         Expr::Call { func, args, keywords: kw, .. } => {
             if let Expr::Name(n) = &**func {
                 match n.as_str() {
-                    "print" => { for a in args.iter() { expr(a, c); } c.cur.push_op(Opcode::Print); return; }
+                    // print removed from opcodes — use utencore.println native function
                     "len" => { for a in args.iter() { expr(a, c); } c.cur.push_op(Opcode::ArrayLen); return; }
                     "int" => { for a in args.iter() { expr(a, c); } c.cur.push_op(Opcode::ToI32); c.cur.push_op(Opcode::ToI64); return; }
                     "str" => { for a in args.iter() { expr(a, c); } c.cur.push_op(Opcode::ToString); return; }
@@ -397,10 +397,8 @@ fn expr(e: &Expr, c: &mut Ctx) {
             if let Expr::Attribute { value: obj, attr } = &**func {
                 // Compile-time handling for known type methods
                 match attr.as_str() {
-                    // String methods → direct opcodes
-                    "upper" => { expr(obj, c); c.cur.push_op(Opcode::StrToUpper); return; }
-                    "lower" => { expr(obj, c); c.cur.push_op(Opcode::StrToLower); return; }
-                    "strip" | "trim" => { expr(obj, c); c.cur.push_op(Opcode::StrTrim); return; }
+                    // String methods removed from opcodes — use library calls
+                    // "upper", "lower", "strip", "trim" fall through to attribute access
                     "len" => { expr(obj, c); c.cur.push_op(Opcode::StrLen); return; }
                     _ => {}
                 }
