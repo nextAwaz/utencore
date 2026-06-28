@@ -570,6 +570,7 @@ dependencies = [
  "log",
  "num-bigint",
  "rayon",
+ "regex",
  "rustc-hash",
  "serde",
  "serde_json",

@@ -355,10 +355,90 @@ impl CibEngine {
 
     // ── Legacy C call (for NativeFnHandle-based calls from VM) ──
 
+    /// Map a ValueTag to its default C type for FFI marshalling.
+    fn value_tag_to_ctype(tag: &ValueTag) -> CType {
+        match tag {
+            ValueTag::Nil => CType::Void,
+            ValueTag::Bool => CType::Bool,
+            ValueTag::Int32 => CType::Int,
+            ValueTag::Int64 => CType::LongLong,
+            ValueTag::Float32 => CType::Float,
+            ValueTag::Float64 => CType::Double,
+            ValueTag::String | ValueTag::HeapString | ValueTag::Bytes | ValueTag::ByteArray => CType::Pointer(Box::new(CType::Char)),
+            ValueTag::BigInt => CType::LongLong,
+            // For opaque GC objects, pass as raw pointer-sized integer
+            ValueTag::NativeFn => CType::Pointer(Box::new(CType::Void)),
+            // Struct tags and other GC objects → void pointer
+            _ => CType::Pointer(Box::new(CType::Void)),
+        }
+    }
+
     pub fn call(&self, func: &NativeFnHandle, args: &[UValue]) -> UtenResult<UValue> {
         log::debug!("CIB legacy call: {} @ 0x{:x}", func.name, func.ptr);
-        // Legacy path — just return nil for now
-        Ok(UValue::Nil)
+
+        // Map function signature ValueTags to CTypes
+        let param_ctypes: Vec<CType> = func.signature.param_types.iter()
+            .map(|t| Self::value_tag_to_ctype(t))
+            .collect();
+        let ret_ctype = Self::value_tag_to_ctype(&func.signature.return_type);
+
+        // Marshal arguments
+        let mut raw_args: Vec<MarshalledValue> = Vec::new();
+        let mut arg_ptrs: Vec<*mut std::ffi::c_void> = Vec::new();
+
+        for (i, arg) in args.iter().enumerate() {
+            let ctype = if i < param_ctypes.len() {
+                &param_ctypes[i]
+            } else {
+                &CType::VarArg
+            };
+            let mv = marshal::marshal(arg, ctype)
+                .map_err(|e| UtenError::Cib(format!("marshal arg {i}: {e}")))?;
+            raw_args.push(mv);
+        }
+
+        // Allocate stack slots and write marshalled values
+        let mut arg_buffers: Vec<Vec<u8>> = Vec::new();
+        for (i, mv) in raw_args.iter().enumerate() {
+            let ctype = if i < param_ctypes.len() {
+                &param_ctypes[i]
+            } else {
+                &CType::VarArg
+            };
+            let size = ctype.size().max(8);
+            let mut buf = vec![0u8; size];
+            mv.write_to(&mut buf[..ctype.size()]);
+            arg_ptrs.push(buf.as_mut_ptr() as *mut std::ffi::c_void);
+            arg_buffers.push(buf);
+        }
+
+        // Prepare FFI types for CIF
+        let ret_ffi_type = crate::cib::ffi::ffi_type_for(&ret_ctype);
+        let arg_ffi_types: Vec<*mut libffi_sys::ffi_type> = param_ctypes.iter()
+            .map(|ct| crate::cib::ffi::ffi_type_for(ct))
+            .collect();
+
+        let cif = crate::cib::ffi::prepare_cif(
+            crate::cib::ffi::FfiAbi::DefaultAbi,
+            ret_ffi_type,
+            &arg_ffi_types,
+        ).map_err(|e| UtenError::Cib(format!("prepare_cif: {e}")))?;
+
+        // Allocate return buffer
+        let ret_size = ret_ctype.size().max(8);
+        let mut ret_buf = vec![0u8; ret_size];
+
+        // ACTUAL FFI CALL
+        #[cfg(not(feature = "no-cib"))]
+        unsafe {
+            ffi::call(&cif, func.ptr, ret_buf.as_mut_ptr() as *mut std::ffi::c_void, &mut arg_ptrs);
+        }
+        #[cfg(feature = "no-cib")]
+        { /* CIB disabled */ }
+
+        // Unmarshal return value
+        marshal::unmarshal(&ret_buf[..ret_ctype.size()], &ret_ctype)
+            .map_err(|e| UtenError::Cib(format!("unmarshal return: {e}")))
     }
 
     // ── Struct operations ──

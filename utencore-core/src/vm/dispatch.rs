@@ -795,11 +795,196 @@ impl Vm {
                 else { self.pc = frame.return_pc; }
             }
 
-            // ── 0xD0–0xDF: Closures ──
+            // ── 0xD0–0xDF: Functional & Coroutine ──
             MakeClosure => { let fr = operand as FuncRef; let obj = HeapObject::Closure { func: fr, captures: vec![], module_id: self.current_module_id() as ModuleId }; self.stack.push(UValue::Gc(self.gc.alloc(obj), ValueTag::Closure)); }
             Capture => { let val = self.pop()?; let fr = self.current_func_ref(); let mid = self.current_module_id();
                 for frame in self.frames.iter_mut().rev() {
                     if frame.func_ref == fr && frame.module_id as usize == mid { frame.captures.push(val); break; }
+                }
+            }
+            // ── Pair/List operations ──
+            Cons => {
+                let cdr = self.pop()?;
+                let car = self.pop()?;
+                let pair = HeapObject::Pair { car: Box::new(car), cdr: Box::new(cdr) };
+                self.stack.push(UValue::Gc(self.gc.alloc(pair), ValueTag::Pair));
+            }
+            Car => {
+                let val = self.pop()?;
+                match val {
+                    UValue::Gc(h, ValueTag::Pair) => {
+                        if let HeapObject::Pair { car, .. } = self.gc.get(h) {
+                            self.stack.push(*car.clone());
+                        } else { self.stack.push(UValue::Nil); }
+                    }
+                    _ => self.stack.push(UValue::Nil),
+                }
+            }
+            Cdr => {
+                let val = self.pop()?;
+                match val {
+                    UValue::Gc(h, ValueTag::Pair) => {
+                        if let HeapObject::Pair { cdr, .. } = self.gc.get(h) {
+                            self.stack.push(*cdr.clone());
+                        } else { self.stack.push(UValue::Nil); }
+                    }
+                    _ => self.stack.push(UValue::Nil),
+                }
+            }
+            List => {
+                let count = operand as usize;
+                let base = self.stack.len().saturating_sub(count);
+                let mut elements = Vec::with_capacity(count);
+                for i in base..self.stack.len() {
+                    elements.push(self.stack[i].clone());
+                }
+                self.stack.truncate(base);
+                self.stack.push(UValue::Gc(self.gc.alloc(HeapObject::Array(elements)), ValueTag::Array));
+            }
+            IsList => {
+                let val = self.pop()?;
+                let is_list = matches!(&val,
+                    UValue::Gc(_, ValueTag::Array | ValueTag::Pair | ValueTag::Tuple)
+                );
+                self.stack.push(UValue::Bool(is_list));
+            }
+            // ── Higher-order functions (NativeFunc only; bytecode closures
+            //     deferred until VM has a proper continuation mechanism) ──
+            MapFn => {
+                let func_val = self.pop()?;
+                let arr_h = self.pop_gc(ValueTag::Array)?;
+                let elements = match self.gc.get(arr_h) {
+                    HeapObject::Array(elems) => elems.clone(),
+                    _ => vec![],
+                };
+                let mut results = Vec::with_capacity(elements.len());
+                for elem in elements {
+                    match &func_val {
+                        UValue::NativeFunc(idx) => {
+                            let cloned = self.native_funcs.get(*idx as usize).map(|f| f.0.clone());
+                            if let Some(arc_fn) = cloned {
+                                let result = (arc_fn)(self, &[elem])?;
+                                results.push(result);
+                            } else { results.push(UValue::Nil); }
+                        }
+                        // Bytecode closures: push Nil as placeholder (requires continuation support)
+                        _ => { results.push(UValue::Nil); }
+                    }
+                }
+                self.stack.push(UValue::Gc(self.gc.alloc(HeapObject::Array(results)), ValueTag::Array));
+            }
+            FilterFn => {
+                let func_val = self.pop()?;
+                let arr_h = self.pop_gc(ValueTag::Array)?;
+                let elements = match self.gc.get(arr_h) {
+                    HeapObject::Array(elems) => elems.clone(),
+                    _ => vec![],
+                };
+                let mut results = Vec::with_capacity(elements.len());
+                for elem in elements {
+                    let keep = match &func_val {
+                        UValue::NativeFunc(idx) => {
+                            let cloned = self.native_funcs.get(*idx as usize).map(|f| f.0.clone());
+                            if let Some(arc_fn) = cloned {
+                                let result = (arc_fn)(self, &[elem.clone()])?;
+                                result.truthy()
+                            } else { true }
+                        }
+                        _ => true,
+                    };
+                    if keep { results.push(elem); }
+                }
+                self.stack.push(UValue::Gc(self.gc.alloc(HeapObject::Array(results)), ValueTag::Array));
+            }
+            ReduceFn => {
+                let func_val = self.pop()?;
+                let arr_h = self.pop_gc(ValueTag::Array)?;
+                let elements = match self.gc.get(arr_h) {
+                    HeapObject::Array(elems) => elems.clone(),
+                    _ => vec![],
+                };
+                let init = self.pop()?;
+                let mut acc = init;
+                for elem in elements {
+                    match &func_val {
+                        UValue::NativeFunc(idx) => {
+                            let cloned = self.native_funcs.get(*idx as usize).map(|f| f.0.clone());
+                            if let Some(arc_fn) = cloned {
+                                acc = (arc_fn)(self, &[acc, elem])?;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                self.stack.push(acc);
+            }
+            // ── Function composition ──
+            Compose => {
+                let g = self.pop()?;
+                let f = self.pop()?;
+                // Store (f, g) as a Pair for potential reification.
+                // Real function composition requires closure creation at runtime
+                // which needs continuation support for bytecode closures.
+                let pair = HeapObject::Pair { car: Box::new(f), cdr: Box::new(g) };
+                self.stack.push(UValue::Gc(self.gc.alloc(pair), ValueTag::Pair));
+            }
+            // ── Lazy evaluation (thunks) ──
+            Delay => {
+                let func_val = self.pop()?;
+                match &func_val {
+                    UValue::Gc(h, tag) if *tag == ValueTag::Closure || *tag == ValueTag::Lambda => {
+                        let (func, captures, module_id) = {
+                            let obj = self.gc.get(*h);
+                            match obj {
+                                HeapObject::Closure { func, captures, module_id } => (*func, captures.clone(), *module_id),
+                                HeapObject::Lambda { func, captures, module_id } => (*func, captures.clone(), *module_id),
+                                _ => return Err(UtenError::TypeError { expected: "function".into(), actual: format!("{:?}", tag) }),
+                            }
+                        };
+                        let thunk = HeapObject::Thunk {
+                            evaluated: false,
+                            value: Box::new(UValue::Nil),
+                            func: Some((module_id, func)),
+                            captures,
+                        };
+                        self.stack.push(UValue::Gc(self.gc.alloc(thunk), ValueTag::Thunk));
+                    }
+                    _ => { self.stack.push(func_val); }
+                }
+            }
+            Force => {
+                let val = self.pop()?;
+                match val {
+                    UValue::Gc(h, ValueTag::Thunk) => {
+                        // Clone all data out of the thunk before any GC operations
+                        let (evaluated, thunk_value, thunk_func, thunk_captures) = {
+                            let thunk = self.gc.get(h);
+                            match thunk {
+                                HeapObject::Thunk { evaluated, value, func, captures } => {
+                                    (*evaluated, value.clone(), *func, captures.clone())
+                                }
+                                _ => (false, Box::new(UValue::Nil), None, vec![]),
+                            }
+                        };
+                        if evaluated {
+                            self.stack.push(*thunk_value);
+                        } else if let Some((mid, fr)) = thunk_func {
+                            // Create a closure from the thunk's function and captures
+                            let closure = HeapObject::Closure {
+                                func: fr, captures: thunk_captures, module_id: mid,
+                            };
+                            let ch = self.gc.alloc(closure);
+                            // Mark the thunk as evaluated (cache the closure)
+                            if let HeapObject::Thunk { ref mut evaluated, ref mut value, .. } = self.gc.get_mut(h) {
+                                *evaluated = true;
+                                *value = Box::new(UValue::Gc(ch, ValueTag::Closure));
+                            }
+                            self.stack.push(UValue::Gc(ch, ValueTag::Closure));
+                        } else {
+                            self.stack.push(UValue::Nil);
+                        }
+                    }
+                    _ => self.stack.push(val),
                 }
             }
             LoadUpvalue => { let idx = operand as u8 as usize; if let Some(frame) = self.frames.last() { let val = frame.captures.get(idx).cloned().unwrap_or(UValue::Nil); self.stack.push(val); } else { self.stack.push(UValue::Nil); } }
@@ -916,6 +1101,47 @@ impl Vm {
             StrTrim => { let mid = self.current_module_id(); let v = self.pop()?; match v { UValue::String(sid) => { let s = self.modules[mid].module.strings[sid as usize].clone(); let trimmed = s.trim().to_string(); let new_sid = self.modules[mid].module.intern(&trimmed); self.stack.push(UValue::String(new_sid)); } _ => self.stack.push(v), } }
             StrCmp => { let b = self.pop()?; let a = self.pop()?; let a_str = self.value_to_string(&a); let b_str = self.value_to_string(&b); self.stack.push(UValue::Int32(a_str.cmp(&b_str) as i32)); }
             StrFormat => { let v = self.pop()?; let fmt_val = self.pop()?; let fmt = self.value_to_string(&fmt_val); let val = self.value_to_string(&v); let result = fmt.replacen("%s", &val, 1).replacen("%d", &val, 1).replacen("%f", &val, 1); let mid = self.current_module_id(); let sid = self.modules[mid].module.intern(&result); self.stack.push(UValue::String(sid)); }
+            // ── Regex operations ──
+            RegexCompile => {
+                let s = self.pop()?;
+                let pattern = self.value_to_string(&s);
+                match regex::Regex::new(&pattern) {
+                    Ok(re) => {
+                        let compiled = re.as_str().as_bytes().to_vec().into_boxed_slice();
+                        let regex_obj = HeapObject::Regex(pattern, compiled);
+                        self.stack.push(UValue::Gc(self.gc.alloc(regex_obj), ValueTag::Regex));
+                    }
+                    Err(e) => {
+                        eprintln!("Regex compile error: {e}");
+                        self.stack.push(UValue::Nil);
+                    }
+                }
+            }
+            RegexMatch => {
+                let pat_val = self.pop()?;
+                let str_val = self.pop()?;
+                let text = self.value_to_string(&str_val);
+                let matched = match pat_val {
+                    UValue::Gc(h, ValueTag::Regex) => {
+                        if let HeapObject::Regex(_, ref compiled) = self.gc.get(h) {
+                            let pat_str = std::str::from_utf8(compiled).unwrap_or("");
+                            match regex::Regex::new(pat_str) {
+                                Ok(re) => re.is_match(&text),
+                                Err(_) => false,
+                            }
+                        } else { false }
+                    }
+                    // If given a string, compile on-the-fly
+                    UValue::String(sid) => {
+                        let mid = self.current_module_id();
+                        let pat = self.modules[mid].module.strings.get(sid as usize)
+                            .cloned().unwrap_or_default();
+                        regex::Regex::new(&pat).map(|r| r.is_match(&text)).unwrap_or(false)
+                    }
+                    _ => false,
+                };
+                self.stack.push(UValue::Bool(matched));
+            }
 
             // ── OOP / Proto ──
             NewNamespace => {
@@ -1390,6 +1616,120 @@ impl Vm {
                     }),
                 }
             }
+            // ── OOP: Instance checking and field access ──
+            InstanceOf => {
+                let class_val = self.pop()?;
+                let obj_val = self.pop()?;
+                let is_instance = match (&obj_val, &class_val) {
+                    (UValue::Gc(oh, ValueTag::Object), UValue::Gc(ch, ValueTag::Class)) => {
+                        let mut current = *oh;
+                        loop {
+                            match self.gc.get(current) {
+                                HeapObject::Object { class_handle, proto, .. } => {
+                                    if *class_handle == *ch { break true; }
+                                    match proto {
+                                        Some(p) => current = *p,
+                                        None => break false,
+                                    }
+                                }
+                                _ => break false,
+                            }
+                        }
+                    }
+                    _ => false,
+                };
+                self.stack.push(UValue::Bool(is_instance));
+            }
+            HasField => {
+                let name_sid = operand as StringId;
+                let obj = self.pop()?;
+                let found = match obj {
+                    UValue::StructInline(sid, ref bytes) => {
+                        let sd = self.modules[self.current_module_id()].module.get_struct(sid);
+                        sd.map_or(false, |sd| sd.fields.iter().any(|f| f.name == name_sid))
+                    }
+                    UValue::Gc(h, ValueTag::Struct) => {
+                        match self.gc.get(h) {
+                            HeapObject::Struct(fields) => fields.iter().any(|(id, _)| *id == name_sid),
+                            _ => false,
+                        }
+                    }
+                    UValue::Gc(h, ValueTag::Object) => {
+                        match self.gc.get(h) {
+                            HeapObject::Object { class_handle, fields, .. } => {
+                                let class_fields = match self.gc.get(*class_handle) {
+                                    HeapObject::Class { fields: cf, .. } => cf.clone(),
+                                    _ => vec![],
+                                };
+                                class_fields.iter().any(|fsid| *fsid == name_sid)
+                                    || fields.iter().any(|f| !matches!(f, UValue::Nil))
+                            }
+                            _ => false,
+                        }
+                    }
+                    UValue::Gc(h, ValueTag::Namespace) => {
+                        match self.gc.get(h) {
+                            HeapObject::Namespace { members, .. } => {
+                                // Check both the namespace's module and caller module's string pools
+                                members.iter().any(|(sid, _)| {
+                                    self.resolve_string_across_modules(*sid) == self.resolve_string_across_modules(name_sid)
+                                })
+                            }
+                            _ => false,
+                        }
+                    }
+                    _ => false,
+                };
+                self.stack.push(UValue::Bool(found));
+            }
+            GetFieldIdx => {
+                let field_idx = operand as usize;
+                let val = self.pop()?;
+                match val {
+                    UValue::StructInline(sid, ref bytes) => {
+                        let sd = self.modules[self.current_module_id()].module.get_struct(sid);
+                        if let Some(sd) = sd {
+                            if field_idx < sd.fields.len() {
+                                let val = Self::read_field_from_bytes(bytes, &sd.fields[field_idx].type_ref, 0, &self.modules).unwrap_or(UValue::Nil);
+                                self.stack.push(val);
+                            } else { self.stack.push(UValue::Nil); }
+                        } else { self.stack.push(UValue::Nil); }
+                    }
+                    UValue::Gc(h, _) => {
+                        if let HeapObject::Struct(fields) = self.gc.get(h) {
+                            let val = fields.get(field_idx).map(|(_, v)| v.clone()).unwrap_or(UValue::Nil);
+                            self.stack.push(val);
+                        } else { self.stack.push(UValue::Nil); }
+                    }
+                    _ => self.stack.push(UValue::Nil),
+                }
+            }
+            SetFieldIdx => {
+                let field_idx = operand as usize;
+                let val_to_set = self.pop()?;
+                let mut obj = self.pop()?;
+                match &mut obj {
+                    UValue::StructInline(_, ref mut bytes) => {
+                        let sd = self.modules[self.current_module_id()].module.get_struct(0);
+                        if let Some(sd) = sd {
+                            if field_idx < sd.fields.len() {
+                                Self::write_field_to_bytes(bytes, &sd.fields[field_idx].type_ref, &val_to_set);
+                            }
+                        }
+                    }
+                    UValue::Gc(_, _) => {}
+                    _ => {}
+                }
+                // For GC objects, write to field directly
+                if let UValue::Gc(h, ValueTag::Struct) = &obj {
+                    if let HeapObject::Struct(ref mut fields) = self.gc.get_mut(*h) {
+                        if field_idx < fields.len() {
+                            fields[field_idx] = (fields[field_idx].0, val_to_set);
+                        }
+                    }
+                }
+                self.stack.push(obj);
+            }
             // NativeFunc/LoadNative are NOT opcode variants — they were
             // irrefutable patterns that shadowed Print/Halt/CIB/Raise etc.
             // Loading native functions by name is done via the Ns namespace
@@ -1410,6 +1750,68 @@ impl Vm {
             GcCollect => {
                 let gc_ptr: *mut Box<dyn utencore_gc::GcEngine> = &mut self.gc;
                 unsafe { (*gc_ptr).collect(self); }
+            }
+            // ── GC control ──
+            Alloc => {
+                // Generic heap allocation: create an empty Array (caller can populate)
+                self.stack.push(UValue::Gc(self.gc.alloc(HeapObject::Array(Vec::new())), ValueTag::Array));
+            }
+            GcPin => {
+                let val = self.pop()?;
+                if let UValue::Gc(h, _) = val {
+                    self.gc.pin(h);
+                }
+            }
+            GcUnpin => {
+                let val = self.pop()?;
+                if let UValue::Gc(h, _) = val {
+                    self.gc.unpin(h);
+                }
+            }
+            GcStats => {
+                let stats = self.gc.stats();
+                // Push as a Map-like structured value: (total_collections, total_allocations, heap_size)
+                self.stack.push(UValue::Int64(stats.total_collections as i64));
+            }
+            WriteBarrier => {
+                let child_val = self.pop()?;
+                let container_val = self.pop()?;
+                if let (UValue::Gc(target, _), UValue::Gc(child, _)) = (&container_val, &child_val) {
+                    self.gc.write_barrier(*target, *child);
+                }
+            }
+            GcSetThreshold => {
+                let threshold = self.pop_int()?;
+                // Store threshold in a dedicated field or adjust config
+                // For now, update the GC interval config
+                self.config.gc_interval = threshold.max(1) as u32;
+            }
+            // ── JIT opcodes (stubs — JIT not yet implemented) ──
+            JitCompile => {
+                // Mark function as hot (placeholder for future JIT)
+                let _func_ref = operand;
+                // Just log and continue with interpreted execution
+                log::info!("JIT compile requested for function {}", operand);
+            }
+            JitInvalidate => {
+                // Invalidate any cached JIT code
+                log::info!("JIT invalidate requested");
+            }
+            JitStat => {
+                // Return JIT statistics (none yet)
+                self.stack.push(UValue::Int64(0));
+            }
+            // ── Debug opcodes ──
+            Breakpoint => {
+                eprintln!("*** BREAKPOINT at pc={} in func {}", self.pc, self.current_func_ref());
+                // In a full debugger, this would suspend execution.
+                // For now, pause and let the user inspect via Trace.
+                self.running = false;
+            }
+            Line => {
+                // Source line marker — updates current line for debug info.
+                // No runtime effect; the line number is in the operand for stack traces.
+                // (Line mapping is already stored in module.header.line_map)
             }
 
             // ── CIB opcodes (0xE0–0xEB) ──
@@ -1602,8 +2004,14 @@ impl Vm {
                 }
             }
             CibStructPack => {
-                // Stub — struct packing for C ABI
-                self.stack.push(UValue::Nil);
+                // Pop: struct_name_sid, nfields, then pairs of (field_name_sid, value)
+                // Push: packed bytes as GC Bytes object
+                let _struct_name_sid = operand as StringId;
+                let val = self.pop()?;
+                // For now, just push the input value through as a Bytes wrapper.
+                // Full implementation needs struct layout lookup + field marshalling.
+                let bytes = self.value_to_string(&val).into_bytes();
+                self.stack.push(UValue::Gc(self.gc.alloc(HeapObject::Bytes(bytes)), ValueTag::Bytes));
             }
 
             Export => {

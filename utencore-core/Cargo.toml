@@ -26,6 +26,7 @@ libc = "0.2"
 bitflags = "2"
 num-bigint = "0.4"
 rayon = "1"
+regex = "1"
 
 [target.'cfg(unix)'.dependencies]
 libffi-sys = { version = "3", features = ["system"] }
