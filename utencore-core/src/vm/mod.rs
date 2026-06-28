@@ -236,6 +236,12 @@ impl Vm {
     }
 
     /// Execute a module's init function.
+    ///
+    /// After init completes, non-Nil globals are automatically synced to
+    /// export_values so that ImportFunc/ImportValue can discover them.
+    /// This means compilers that use StoreGlobal (like py2uc) don't need
+    /// to emit explicit Export opcodes — though Export still works and
+    /// takes precedence.
     pub(crate) fn run_module_init(&mut self, module_id: ModuleId) -> UtenResult<()> {
         let n_funcs = self.modules[module_id as usize].module.functions.len();
         if n_funcs == 0 { return Ok(()); }
@@ -256,6 +262,11 @@ impl Vm {
         self.call_depth = 0;
         self.run_loop().ok();
         self.restore_state(saved);
+
+        // Language-agnostic: sync StoreGlobal assignments to export_values
+        // so ImportFunc/ImportValue can find them without explicit Export opcodes.
+        self.sync_globals_to_exports(module_id);
+
         Ok(())
     }
 
@@ -1200,6 +1211,104 @@ impl Vm {
         // No handler found — propagate error
         Err(UtenError::Vm(format!("Unhandled exception: {msg}")))
     }
+
+    // ── Namespace / Module management ──
+
+    /// Build a HeapObject::Namespace wrapping a loaded module's exports.
+    ///
+    /// This is the language-agnostic representation of an imported module:
+    /// ts2uc, py2uc, lu2uc all get the same Namespace handle back from
+    /// the Import opcode. GetField/GetAttr on the namespace resolve to
+    /// the module's exported symbols.
+    ///
+    /// `resolved_name` is the post-alias-resolution module name (used as
+    /// the namespace display name).
+    pub(crate) fn build_module_namespace(&mut self, module_id: ModuleId, resolved_name: &str) -> GcHandle {
+        let mid = self.current_module_id();
+        let name_sid = self.modules[mid].module.intern(resolved_name);
+
+        // Collect export entries as namespace members.
+        // Clone export_values first to avoid borrow conflict with module.intern().
+        let exports_snapshot: Vec<(String, UValue)> = {
+            let target_mid = module_id as usize;
+            if target_mid < self.modules.len() {
+                self.modules[target_mid].export_values.iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        };
+
+        let target_mid = module_id as usize;
+        let mut members: Vec<(StringId, UValue)> = Vec::new();
+        for (export_name, value) in &exports_snapshot {
+            let member_sid = self.modules[target_mid].module.intern(export_name);
+            members.push((member_sid, value.clone()));
+        }
+
+        self.gc.alloc(HeapObject::Namespace {
+            name: name_sid,
+            members,
+            module_id,
+        })
+    }
+
+    /// Sync non-Nil global variables to export_values after module init runs.
+    ///
+    /// This bridges the gap for compilers (like py2uc) that use StoreGlobal
+    /// instead of the Export opcode. After module init executes, any global
+    /// that was assigned a non-Nil value is automatically discoverable via
+    /// ImportFunc/ImportValue.
+    ///
+    /// Compilers that emit explicit Export opcodes don't need this, but it
+    /// is harmless — Export always wins (it writes after init, overwriting).
+    pub(crate) fn sync_globals_to_exports(&mut self, module_id: ModuleId) {
+        let mid = module_id as usize;
+        if mid >= self.modules.len() {
+            return;
+        }
+
+        // Collect names and corresponding values from globals, plus function
+        // names for the function-index fallback. All done in one scope so the
+        // immutable borrow on self.modules is released before we mutate.
+        let (to_export, func_names, globals_snapshot) = {
+            let module = &self.modules[mid];
+            let to_export: Vec<(String, UValue)> = module.module.globals.iter()
+                .enumerate()
+                .filter_map(|(i, gdef)| {
+                    let val = module.globals.get(i).cloned().unwrap_or(UValue::Nil);
+                    if matches!(val, UValue::Nil) {
+                        None
+                    } else {
+                        Some((gdef.name.clone(), val))
+                    }
+                })
+                .collect();
+            let func_names: Vec<String> = module.module.functions.iter()
+                .map(|f| f.name.clone())
+                .collect();
+            let globals_snapshot: Vec<UValue> = module.globals.clone();
+            (to_export, func_names, globals_snapshot)
+        };
+
+        // Insert all collected exports (now the immutable borrow is released)
+        for (name, val) in &to_export {
+            self.modules[mid].export_values.entry(name.clone()).or_insert_with(|| val.clone());
+        }
+
+        // Check each global position: if it holds a non-Nil value and the
+        // position corresponds to a function index, export it by function name.
+        for (idx, val) in globals_snapshot.iter().enumerate() {
+            if matches!(val, UValue::Nil) {
+                continue;
+            }
+            if idx < func_names.len() && !func_names[idx].starts_with('<') {
+                let name = func_names[idx].clone();
+                self.modules[mid].export_values.entry(name).or_insert_with(|| val.clone());
+            }
+        }
+    }
 }
 
 impl utencore_gc::TraceRoots for Vm {
@@ -1232,5 +1341,264 @@ impl utencore_gc::TraceRoots for Vm {
                 }
             }
         }
+    }
+}
+
+// ── Namespace management tests ──
+
+#[cfg(test)]
+mod tests {
+    use crate::bytecode::{BytecodeWriter, FunctionDef, UtenModule};
+    use crate::opcodes::Opcode;
+    use crate::vm::Vm;
+    use utencore_types::*;
+
+    /// Helper: build a module with one function, load it, run init, return mid.
+    fn load_and_init(vm: &mut Vm, name: &str, bytecode: Vec<u8>) -> ModuleId {
+        let mut m = UtenModule::new(name);
+        m.functions.push(FunctionDef {
+            name: "<main>".into(),
+            bytecode,
+            n_locals: 4, n_params: 0, is_variadic: false,
+            n_captures: 0, return_type: None, param_types: vec![],
+            jit_code: None, hotness: 0,
+        });
+        let mid = vm.load_module(m).unwrap();
+        vm.run_module_init(mid).ok();
+        mid
+    }
+
+    #[test]
+    fn test_export_opcode_registers_value() {
+        let mut vm = Vm::new();
+        let mut w = BytecodeWriter::new();
+        w.emit(Opcode::PushI32); w.emit_i32(42);
+        let answer_sid = 0u16; // first interned string will be "answer"
+        w.emit(Opcode::Export); w.emit_u16(answer_sid);
+        w.emit(Opcode::Return);
+
+        // We need "answer" in the string pool. Pre-intern it so sid == 0.
+        let mut m = UtenModule::new("test_export");
+        assert_eq!(m.intern("answer"), 0); // confirm sid 0
+        m.functions.push(FunctionDef {
+            name: "<main>".into(), bytecode: w.into_bytes(),
+            n_locals: 4, n_params: 0, is_variadic: false,
+            n_captures: 0, return_type: None, param_types: vec![],
+            jit_code: None, hotness: 0,
+        });
+        let mid = vm.load_module(m).unwrap();
+        vm.run_module_init(mid).unwrap();
+
+        assert!(vm.modules[mid as usize].export_values.contains_key("answer"),
+            "Export opcode should register 'answer' in export_values");
+    }
+
+    #[test]
+    fn test_build_module_namespace() {
+        let mut vm = Vm::new();
+
+        // Create a module that exports "greet"
+        let mut m = UtenModule::new("mylib");
+        let greet_sid = m.intern("greet");
+        m.functions.push(FunctionDef {
+            name: "greet".into(),
+            bytecode: {
+                let mut w = BytecodeWriter::new();
+                w.emit(Opcode::PushI32); w.emit_i32(99);
+                w.emit(Opcode::ReturnValue);
+                w.into_bytes()
+            },
+            n_locals: 0, n_params: 0, is_variadic: false,
+            n_captures: 0, return_type: None, param_types: vec![],
+            jit_code: None, hotness: 0,
+        });
+        // Init function that exports greet
+        m.functions.push(FunctionDef {
+            name: "<main>".into(),
+            bytecode: {
+                let mut w = BytecodeWriter::new();
+                w.emit(Opcode::PushI32); w.emit_i32(99);
+                w.emit(Opcode::Export); w.emit_u16(greet_sid as u16);
+                w.emit(Opcode::Return);
+                w.into_bytes()
+            },
+            n_locals: 4, n_params: 0, is_variadic: false,
+            n_captures: 0, return_type: None, param_types: vec![],
+            jit_code: None, hotness: 0,
+        });
+        let mid = vm.load_module(m).unwrap();
+        vm.run_module_init(mid).unwrap();
+
+        // Register for import resolution
+        vm.loader.register_loaded("mylib", mid as usize);
+
+        // Build namespace and verify it contains "greet"
+        let ns_handle = vm.build_module_namespace(mid, "mylib");
+        if let HeapObject::Namespace { members, .. } = vm.gc.get(ns_handle) {
+            assert!(!members.is_empty(), "Namespace should have members");
+            // members contain (StringId keyed to mylib's string pool, UValue)
+        } else {
+            panic!("Expected Namespace");
+        }
+    }
+
+    #[test]
+    fn test_cross_module_import_via_opcodes() {
+        let mut vm = Vm::new();
+
+        // ── Module "mylib": exports "answer" = 42 ──
+        let mut lib = UtenModule::new("mylib");
+        let answer_sid = lib.intern("answer") as u16; // sid 0
+        assert_eq!(answer_sid, 0);
+        lib.functions.push(FunctionDef {
+            name: "<main>".into(),
+            bytecode: {
+                let mut w = BytecodeWriter::new();
+                w.emit(Opcode::PushI32); w.emit_i32(42);
+                w.emit(Opcode::Export); w.emit_u16(answer_sid);
+                w.emit(Opcode::Return);
+                w.into_bytes()
+            },
+            n_locals: 4, n_params: 0, is_variadic: false,
+            n_captures: 0, return_type: None, param_types: vec![],
+            jit_code: None, hotness: 0,
+        });
+        let lib_mid = vm.load_module(lib).unwrap();
+        vm.run_module_init(lib_mid).unwrap();
+        vm.loader.register_loaded("mylib", lib_mid as usize);
+
+        // ── Module "main": import mylib; mylib.answer() ──
+        let mut main = UtenModule::new("main");
+        let mylib_sid = main.intern("mylib") as u16;
+        let answer_sid_main = main.intern("answer") as u16; // sid 1
+        main.functions.push(FunctionDef {
+            name: "<main>".into(),
+            bytecode: {
+                let mut w = BytecodeWriter::new();
+                // import mylib → pushes Namespace
+                w.emit(Opcode::Import); w.emit_u16(mylib_sid);
+                // get answer from namespace
+                w.emit(Opcode::GetField); w.emit_u16(answer_sid_main);
+                // call it (answer is a value 42, CallValue on non-callable may fail,
+                // but we're just testing the import→namespace→GetField chain)
+                // Actually, let's just return the value directly
+                w.emit(Opcode::ReturnValue);
+                w.into_bytes()
+            },
+            n_locals: 4, n_params: 0, is_variadic: false,
+            n_captures: 0, return_type: None, param_types: vec![],
+            jit_code: None, hotness: 0,
+        });
+        let main_mid = vm.load_module(main).unwrap();
+
+        let result = vm.execute(main_mid, 0, vec![]).unwrap();
+        // Should get 42 from the exported value
+        assert_eq!(format!("{result}"), "42",
+            "Import→GetField on namespace should return the exported value");
+    }
+
+    #[test]
+    fn test_importfunc_with_namespace_handle() {
+        let mut vm = Vm::new();
+
+        // Module "calc" with a function "double" and Export in init
+        let mut calc = UtenModule::new("calc");
+        let double_sid = calc.intern("double") as u16;
+        // The double function
+        calc.functions.push(FunctionDef {
+            name: "double".into(),
+            bytecode: {
+                let mut w = BytecodeWriter::new();
+                w.emit(Opcode::LoadLocal); w.emit_u16(0); // load param
+                w.emit(Opcode::PushI32); w.emit_i32(2);
+                w.emit(Opcode::Mul);
+                w.emit(Opcode::ReturnValue);
+                w.into_bytes()
+            },
+            n_locals: 1, n_params: 1, is_variadic: false,
+            n_captures: 0, return_type: None, param_types: vec![],
+            jit_code: None, hotness: 0,
+        });
+        // Init: create closure for double, export it
+        calc.functions.push(FunctionDef {
+            name: "<main>".into(),
+            bytecode: {
+                let mut w = BytecodeWriter::new();
+                w.emit(Opcode::MakeClosure); w.emit_u16(0); // func 0
+                w.emit(Opcode::Export); w.emit_u16(double_sid);
+                w.emit(Opcode::Return);
+                w.into_bytes()
+            },
+            n_locals: 4, n_params: 0, is_variadic: false,
+            n_captures: 0, return_type: None, param_types: vec![],
+            jit_code: None, hotness: 0,
+        });
+        let calc_mid = vm.load_module(calc).unwrap();
+        vm.run_module_init(calc_mid).unwrap();
+        vm.loader.register_loaded("calc", calc_mid as usize);
+
+        // Main: import calc; ImportFunc double; call with arg 5
+        let mut main = UtenModule::new("main");
+        let calc_sid = main.intern("calc") as u16;
+        let double_sid_main = main.intern("double") as u16;
+        main.functions.push(FunctionDef {
+            name: "<main>".into(),
+            bytecode: {
+                let mut w = BytecodeWriter::new();
+                // Push arg and arg_count FIRST (go below the function on stack)
+                w.emit(Opcode::PushI32); w.emit_i32(5);   // arg
+                w.emit(Opcode::PushI32); w.emit_i32(1);   // arg_count
+                // import calc → pushes Namespace
+                w.emit(Opcode::Import); w.emit_u16(calc_sid);
+                // ImportFunc double → pops namespace, pushes "double" closure
+                // Now stack is: [arg=5, arg_count=1, closure] — CallValue ready
+                w.emit(Opcode::ImportFunc); w.emit_u16(double_sid_main);
+                w.emit(Opcode::CallValue);
+                w.emit(Opcode::ReturnValue);
+                w.into_bytes()
+            },
+            n_locals: 4, n_params: 0, is_variadic: false,
+            n_captures: 0, return_type: None, param_types: vec![],
+            jit_code: None, hotness: 0,
+        });
+        let main_mid = vm.load_module(main).unwrap();
+
+        let result = vm.execute(main_mid, 0, vec![]).unwrap();
+        assert_eq!(format!("{result}"), "10",
+            "Import→ImportFunc→CallValue(5) on double should return 10");
+    }
+
+    #[test]
+    fn test_sync_globals_to_exports() {
+        let mut vm = Vm::new();
+
+        // Module that uses StoreGlobal (not Export) — like py2uc output
+        let mut m = UtenModule::new("pymod");
+        m.globals.push(crate::bytecode::GlobalDef {
+            name: "my_func".into(),
+            init_value: None,
+            is_exported: false,
+        });
+        m.functions.push(FunctionDef {
+            name: "<main>".into(),
+            bytecode: {
+                let mut w = BytecodeWriter::new();
+                w.emit(Opcode::PushI32); w.emit_i32(77);
+                w.emit(Opcode::StoreGlobal); w.emit_u16(0); // global index 0 = "my_func"
+                w.emit(Opcode::Return);
+                w.into_bytes()
+            },
+            n_locals: 4, n_params: 0, is_variadic: false,
+            n_captures: 0, return_type: None, param_types: vec![],
+            jit_code: None, hotness: 0,
+        });
+        let mid = vm.load_module(m).unwrap();
+        vm.run_module_init(mid).unwrap();
+
+        // run_module_init now calls sync_globals_to_exports automatically...
+        // Let's check: was "my_func" synced?
+        // (If not, we need to call it explicitly)
+        assert!(vm.modules[mid as usize].export_values.contains_key("my_func"),
+            "sync_globals_to_exports should export StoreGlobal-assigned functions");
     }
 }

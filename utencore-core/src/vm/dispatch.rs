@@ -1607,21 +1607,25 @@ impl Vm {
             }
 
             Export => {
+                // Language-agnostic export: pop a value and register it in the
+                // current module's export_values table. ImportFunc/ImportValue
+                // look here first, so this is the primary mechanism for making
+                // symbols visible to importing modules.
                 let val = self.pop()?;
                 let mid = self.current_module_id();
-                let exports = &self.modules[mid].module.exports;
                 let sid = operand as StringId;
-                let name = self.modules[mid].module.strings.get(sid as usize)
-                    .cloned().unwrap_or_default();
-                if let Some(export) = exports.iter().find(|_e| {
-                    // Check if export name matches
-                    true // simplified: skip name matching
-                }) {
-                    // Simplified export handling (no name matching yet)
-                    // Real implementation would look up by name
+                if let Some(name) = self.modules[mid].module.strings.get(sid as usize).cloned() {
+                    if !name.is_empty() {
+                        self.modules[mid].export_values.insert(name, val);
+                    }
                 }
             }
             Import => {
+                // Language-agnostic import: resolve a module name, load it,
+                // and push a Namespace handle wrapping its exports.
+                // This means `import foo; foo.bar()` works via standard
+                // GetField on the Namespace — no special module_id handling
+                // needed in compilers.
                 let mid = self.current_module_id();
                 let name_sid = operand as StringId;
                 let name = self.modules[mid].module.strings.get(name_sid as usize)
@@ -1630,32 +1634,46 @@ impl Vm {
                 let resolved = self.resolve_ns_alias(&name);
 
                 if let Some(module_id) = self.import_module_by_name(&resolved) {
-                    self.stack.push(UValue::Int32(module_id as i32));
+                    let ns_handle = self.build_module_namespace(module_id, &resolved);
+                    self.stack.push(UValue::Gc(ns_handle, ValueTag::Namespace));
                 } else {
                     eprintln!("Warning: module '{name}' not found (resolved: '{resolved}')");
                     self.stack.push(UValue::Nil);
                 }
             }
             ImportFunc => {
+                // Language-agnostic named import: look up a symbol in an
+                // imported module. Accepts Namespace handle (from Import
+                // opcode) or raw module_id integer (legacy compat).
                 let name_sid = operand as StringId;
                 let module_id_val = self.pop()?;
-                let module_id = match module_id_val {
-                    UValue::Int32(id) => id as usize,
-                    UValue::Int64(id) => id as usize,
-                    _ => {
-                        self.stack.push(UValue::Nil);
-                        return Ok(());
+                let module_id: Option<usize> = match &module_id_val {
+                    // New path: Namespace handle (from Import opcode)
+                    UValue::Gc(h, ValueTag::Namespace) => {
+                        match self.gc.get(*h) {
+                            HeapObject::Namespace { module_id, .. } => Some(*module_id as usize),
+                            _ => None,
+                        }
                     }
+                    // Legacy path: raw module_id integer
+                    UValue::Int32(id) => Some(*id as usize),
+                    UValue::Int64(id) => Some(*id as usize),
+                    _ => None,
+                };
+                let Some(module_id) = module_id else {
+                    self.stack.push(UValue::Nil);
+                    return Ok(());
                 };
                 let mid = self.current_module_id();
                 let name = self.modules[mid].module.strings.get(name_sid as usize)
                     .cloned().unwrap_or_default();
                 if module_id < self.modules.len() {
+                    // 1. Primary: export_values (populated by Export opcode + init sync)
                     if let Some(val) = self.modules[module_id].export_values.get(&name) {
-                        // 1. Runtime exports (set up by native module registration)
                         self.stack.push(val.clone());
-                    } else if let Some(export) = self.modules[module_id].module.exports.get(&name) {
-                        // 2. Bytecode-level export table
+                    }
+                    // 2. Bytecode-level export table
+                    else if let Some(export) = self.modules[module_id].module.exports.get(&name) {
                         match export {
                             ExportEntry::Function(fr) => {
                                 let closure = HeapObject::Closure {
@@ -1674,25 +1692,19 @@ impl Vm {
                                 self.stack.push(UValue::Nil);
                             }
                         }
-                    } else {
-                        // 3. Fallback: search module globals (for py2uc-compiled modules
-                        //    where functions are stored via StoreGlobal but not exported)
-                        //    First run the module init if not yet done, then search globals.
-                        let found = {
-                            // Find function by name in the module's function table
-                            let fi = self.modules[module_id].module.functions.iter()
-                                .position(|f| f.name == name);
-                            fi.map(|fi| {
-                                let closure = HeapObject::Closure {
-                                    func: fi as FuncRef,
-                                    captures: vec![],
-                                    module_id: module_id as ModuleId,
-                                };
-                                UValue::Gc(self.gc.alloc(closure), ValueTag::Closure)
-                            })
-                        };
-                        if let Some(val) = found {
-                            self.stack.push(val);
+                    }
+                    // 3. Fallback: search function table by name
+                    //    (for modules that use StoreGlobal without Export opcodes)
+                    else {
+                        let fi = self.modules[module_id].module.functions.iter()
+                            .position(|f| f.name == name);
+                        if let Some(fi) = fi {
+                            let closure = HeapObject::Closure {
+                                func: fi as FuncRef,
+                                captures: vec![],
+                                module_id: module_id as ModuleId,
+                            };
+                            self.stack.push(UValue::Gc(self.gc.alloc(closure), ValueTag::Closure));
                         } else {
                             self.stack.push(UValue::Nil);
                         }
@@ -1702,15 +1714,24 @@ impl Vm {
                 }
             }
             ImportValue => {
+                // Language-agnostic value import: look up a non-function
+                // export. Accepts Namespace handle or raw module_id.
                 let name_sid = operand as StringId;
                 let module_id_val = self.pop()?;
-                let module_id = match module_id_val {
-                    UValue::Int32(id) => id as usize,
-                    UValue::Int64(id) => id as usize,
-                    _ => {
-                        self.stack.push(UValue::Nil);
-                        return Ok(());
+                let module_id: Option<usize> = match &module_id_val {
+                    UValue::Gc(h, ValueTag::Namespace) => {
+                        match self.gc.get(*h) {
+                            HeapObject::Namespace { module_id, .. } => Some(*module_id as usize),
+                            _ => None,
+                        }
                     }
+                    UValue::Int32(id) => Some(*id as usize),
+                    UValue::Int64(id) => Some(*id as usize),
+                    _ => None,
+                };
+                let Some(module_id) = module_id else {
+                    self.stack.push(UValue::Nil);
+                    return Ok(());
                 };
                 let mid = self.current_module_id();
                 let name = self.modules[mid].module.strings.get(name_sid as usize)

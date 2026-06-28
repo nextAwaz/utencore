@@ -165,6 +165,3 @@ cargo test --lib
 ## License
 
 MPL-2.0. See LICENSE file for details.
-=======
-# utencore
-
