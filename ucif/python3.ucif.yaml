@@ -1,0 +1,427 @@
+# python3.ucif — UtenCore Interface Definition for CPython C API
+#
+# This file describes the CPython C API to CIB, allowing compilers
+# (like py2uc) to call CPython's C functions directly with automatic
+# type marshalling.
+#
+# Compilers reference this interface by name at compile time, emit
+# CibLoadInterface + CibCallTyped opcodes, and CIB handles the rest.
+#
+# Usage from py2uc:
+#   let interface = cib.load_interface_bytes(include_bytes!("python3.ucif"))?;
+#   // Then: cib.call_typed(interface, func_idx, args)
+
+name: python3
+description: CPython 3.12 C API
+version: [3, 12]
+
+# Required shared libraries
+# CIB will dlopen these when the interface is loaded
+libraries:
+  - python3.12
+
+# ── Type aliases ──
+typedefs:
+  - {alias: PyObject, ctype: Pointer(Void)}
+  - {alias: Py_ssize_t, ctype: Long}
+  - {alias: const_char_ptr, ctype: ConstPointer(Char)}
+
+# ── Constants ──
+constants:
+  - name: [NULL]
+    type: Pointer
+    value: 0
+  - name: [Py_None]
+    type: Pointer
+    value: 0
+  - name: [PY_MAJOR_VERSION]
+    type: Int
+    value: 3
+
+# ── Initialization & Finalization ──
+functions:
+  - name: Py_Initialize
+    ret: Void
+    params: []
+    library: python3.12
+
+  - name: Py_InitializeEx
+    ret: Void
+    params:
+      - {name: initsigs, ctype: Int}
+    library: python3.12
+
+  - name: Py_IsInitialized
+    ret: Int
+    params: []
+
+  - name: Py_Finalize
+    ret: Void
+    params: []
+    library: python3.12
+
+  - name: Py_FinalizeEx
+    ret: Int
+    params: []
+
+# ── Object protocol ──
+  - name: PyObject_Print
+    ret: Int
+    params:
+      - {name: op, ctype: Pointer(Void)}
+      - {name: fp, ctype: Pointer(Void)}  # FILE*
+      - {name: flags, ctype: Int}
+
+  - name: PyObject_GetAttrString
+    ret: Pointer(Void)
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+      - {name: attr_name, ctype: ConstPointer(Char)}
+
+  - name: PyObject_SetAttrString
+    ret: Int
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+      - {name: attr_name, ctype: ConstPointer(Char)}
+      - {name: val, ctype: Pointer(Void)}
+
+  - name: PyObject_Str
+    ret: Pointer(Void)
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyObject_Repr
+    ret: Pointer(Void)
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyObject_Type
+    ret: Pointer(Void)
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyObject_HasAttrString
+    ret: Int
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+      - {name: attr_name, ctype: ConstPointer(Char)}
+
+  - name: PyObject_IsTrue
+    ret: Int
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyObject_Not
+    ret: Int
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyObject_RichCompare
+    ret: Pointer(Void)
+    params:
+      - {name: obj1, ctype: Pointer(Void)}
+      - {name: obj2, ctype: Pointer(Void)}
+      - {name: opid, ctype: Int}
+
+# ── Type checking ──
+  - name: PyType_Check
+    ret: Int
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyUnicode_Check
+    ret: Int
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyLong_Check
+    ret: Int
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyFloat_Check
+    ret: Int
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyList_Check
+    ret: Int
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyDict_Check
+    ret: Int
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+# ── Integer conversion ──
+  - name: PyLong_FromLong
+    ret: Pointer(Void)
+    params:
+      - {name: val, ctype: Long}
+
+  - name: PyLong_FromLongLong
+    ret: Pointer(Void)
+    params:
+      - {name: val, ctype: LongLong}
+
+  - name: PyLong_AsLong
+    ret: Long
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyLong_AsLongLong
+    ret: LongLong
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyLong_AsDouble
+    ret: Double
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+# ── Float conversion ──
+  - name: PyFloat_FromDouble
+    ret: Pointer(Void)
+    params:
+      - {name: val, ctype: Double}
+
+  - name: PyFloat_AsDouble
+    ret: Double
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+# ── String/Unicode ──
+  - name: PyUnicode_FromString
+    ret: Pointer(Void)
+    params:
+      - {name: str, ctype: ConstPointer(Char)}
+
+  - name: PyUnicode_FromStringAndSize
+    ret: Pointer(Void)
+    params:
+      - {name: str, ctype: ConstPointer(Char)}
+      - {name: size, ctype: Long}
+
+  - name: PyUnicode_AsUTF8
+    ret: ConstPointer(Char)
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: PyUnicode_GetLength
+    ret: Long
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+# ── List operations ──
+  - name: PyList_New
+    ret: Pointer(Void)
+    params:
+      - {name: len, ctype: Long}
+
+  - name: PyList_Size
+    ret: Long
+    params:
+      - {name: list, ctype: Pointer(Void)}
+
+  - name: PyList_GetItem
+    ret: Pointer(Void)
+    params:
+      - {name: list, ctype: Pointer(Void)}
+      - {name: index, ctype: Long}
+
+  - name: PyList_SetItem
+    ret: Int
+    params:
+      - {name: list, ctype: Pointer(Void)}
+      - {name: index, ctype: Long}
+      - {name: item, ctype: Pointer(Void)}
+
+  - name: PyList_Append
+    ret: Int
+    params:
+      - {name: list, ctype: Pointer(Void)}
+      - {name: item, ctype: Pointer(Void)}
+
+# ── Dict operations ──
+  - name: PyDict_New
+    ret: Pointer(Void)
+    params: []
+
+  - name: PyDict_GetItemString
+    ret: Pointer(Void)
+    params:
+      - {name: dict, ctype: Pointer(Void)}
+      - {name: key, ctype: ConstPointer(Char)}
+
+  - name: PyDict_SetItemString
+    ret: Int
+    params:
+      - {name: dict, ctype: Pointer(Void)}
+      - {name: key, ctype: ConstPointer(Char)}
+      - {name: val, ctype: Pointer(Void)}
+
+  - name: PyDict_Size
+    ret: Long
+    params:
+      - {name: dict, ctype: Pointer(Void)}
+
+# ── Callable ──
+  - name: PyObject_CallObject
+    ret: Pointer(Void)
+    params:
+      - {name: callable, ctype: Pointer(Void)}
+      - {name: args, ctype: Pointer(Void)}     # PyObject* (tuple)
+
+  - name: PyObject_CallFunction
+    ret: Pointer(Void)
+    params:
+      - {name: callable, ctype: Pointer(Void)}
+      - {name: format, ctype: ConstPointer(Char)}
+    is_variadic: true
+
+  - name: PyObject_CallMethod
+    ret: Pointer(Void)
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+      - {name: method_name, ctype: ConstPointer(Char)}
+      - {name: format, ctype: ConstPointer(Char)}
+    is_variadic: true
+
+# ── Reference counting ──
+  - name: Py_XINCREF
+    ret: Void
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+    convention: C
+
+  - name: Py_XDECREF
+    ret: Void
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+    convention: C
+
+  - name: Py_INCREF
+    ret: Void
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+  - name: Py_DECREF
+    ret: Void
+    params:
+      - {name: obj, ctype: Pointer(Void)}
+
+# ── Error handling ──
+  - name: PyErr_Clear
+    ret: Void
+    params: []
+
+  - name: PyErr_Occurred
+    ret: Pointer(Void)
+    params: []
+
+  - name: PyErr_SetString
+    ret: Void
+    params:
+      - {name: typ, ctype: Pointer(Void)}
+      - {name: msg, ctype: ConstPointer(Char)}
+
+  - name: PyErr_Format
+    ret: Pointer(Void)
+    params:
+      - {name: typ, ctype: Pointer(Void)}
+      - {name: format, ctype: ConstPointer(Char)}
+    is_variadic: true
+
+# ── Module import ──
+  - name: PyImport_ImportModule
+    ret: Pointer(Void)
+    params:
+      - {name: name, ctype: ConstPointer(Char)}
+
+  - name: PyImport_AddModule
+    ret: Pointer(Void)
+    params:
+      - {name: name, ctype: ConstPointer(Char)}
+
+# ── Eval ──
+  - name: PyRun_SimpleString
+    ret: Int
+    params:
+      - {name: command, ctype: ConstPointer(Char)}
+
+  - name: PyRun_SimpleStringFlags
+    ret: Int
+    params:
+      - {name: command, ctype: ConstPointer(Char)}
+      - {name: flags, ctype: Pointer(Void)}
+
+  - name: Py_CompileString
+    ret: Pointer(Void)
+    params:
+      - {name: str, ctype: ConstPointer(Char)}
+      - {name: filename, ctype: ConstPointer(Char)}
+      - {name: start, ctype: Int}
+
+  - name: PyEval_EvalCode
+    ret: Pointer(Void)
+    params:
+      - {name: co, ctype: Pointer(Void)}
+      - {name: globals, ctype: Pointer(Void)}
+      - {name: locals, ctype: Pointer(Void)}
+
+# ── GIL (for embedding Python in threaded VMs) ──
+  - name: PyGILState_Ensure
+    ret: Int     # PyGILState_STATE (opaque enum)
+    params: []
+
+  - name: PyGILState_Release
+    ret: Void
+    params:
+      - {name: state, ctype: Int}
+
+# ── Buffer / Memory ──
+  - name: PyBuffer_New
+    ret: Pointer(Void)
+    params:
+      - {name: size, ctype: Long}
+
+  - name: PyMemoryView_FromMemory
+    ret: Pointer(Void)
+    params:
+      - {name: mem, ctype: ConstPointer(Char)}
+      - {name: size, ctype: Long}
+      - {name: flags, ctype: Int}
+
+# ── Struct layouts ──
+structs:
+  - name: Py_buffer
+    size: 64
+    alignment: 8
+    fields:
+      - {name: buf, ctype: Pointer(Void), offset: 0}
+      - {name: obj, ctype: Pointer(Void), offset: 8}
+      - {name: len, ctype: Long, offset: 16}
+      - {name: itemsize, ctype: Long, offset: 24}
+      - {name: readonly, ctype: Int, offset: 32}
+      - {name: ndim, ctype: Int, offset: 36}
+      - {name: format, ctype: ConstPointer(Char), offset: 40}
+      - {name: shape, ctype: Pointer(Long), offset: 48}
+      - {name: strides, ctype: Pointer(Long), offset: 56}
+
+  - name: PyTypeObject
+    size: 1080   # Approximate for Python 3.12
+    alignment: 8
+    fields:
+      - {name: ob_refcnt, ctype: Long, offset: 0}
+      - {name: ob_type, ctype: Pointer(Void), offset: 8}
+      - {name: ob_size, ctype: Long, offset: 16}
+      - {name: tp_name, ctype: ConstPointer(Char), offset: 24}
+      - {name: tp_basicsize, ctype: Long, offset: 32}
+      - {name: tp_itemsize, ctype: Long, offset: 40}
+      - {name: tp_dealloc, ctype: Pointer(Void), offset: 48}     # function pointer
+      - {name: tp_flags, ctype: ULong, offset: 104}
+      - {name: tp_doc, ctype: ConstPointer(Char), offset: 112}
+      - {name: tp_weaklistoffset, ctype: Long, offset: 280}
+      - {name: tp_dict, ctype: Pointer(Void), offset: 352}
+      - {name: tp_init, ctype: Pointer(Void), offset: 392}       # function pointer

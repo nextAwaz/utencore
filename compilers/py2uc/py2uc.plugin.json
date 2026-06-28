@@ -1,0 +1,17 @@
+{
+    "manifest_version": 1,
+    "name": "py2uc",
+    "version": "0.0.5",
+    "plugin_type": "compiler",
+    "description": "Python 3 to UtenCore bytecode compiler",
+    "author": "Uten Core Contributors",
+    "bytecode_version": {
+        "min": 1,
+        "max": 2
+    },
+    "ccis": {
+        "language": "Python 3",
+        "extensions": ["py"],
+        "default_gc": "generational"
+    }
+}

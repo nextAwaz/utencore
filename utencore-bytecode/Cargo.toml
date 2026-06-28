@@ -1,0 +1,12 @@
+[package]
+name = "utencore-bytecode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Uten Core — bytecode format, module definition, verification"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+utencore-types = { path = "../utencore-types" }

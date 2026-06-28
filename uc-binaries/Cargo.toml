@@ -1,0 +1,33 @@
+[package]
+name = "uc-binaries"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Uten Core — uc, ucc, ucw, ucdump, utencore"
+
+[dependencies]
+utencore = { path = "../utencore-core" }
+py2uc = { path = "../compilers/py2uc" }
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+log = "0.4"
+
+[[bin]]
+name = "uc"
+path = "src/bin/uc.rs"
+
+[[bin]]
+name = "ucc"
+path = "src/bin/ucc.rs"
+
+[[bin]]
+name = "ucw"
+path = "src/bin/ucw.rs"
+
+[[bin]]
+name = "ucdump"
+path = "src/bin/ucdump.rs"
+
+[[bin]]
+name = "utencore"
+path = "src/bin/utencore.rs"

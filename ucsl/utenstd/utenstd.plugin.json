@@ -1,0 +1,12 @@
+{
+    "manifest_version": 1,
+    "name": "utenstd",
+    "version": "0.0.5",
+    "plugin_type": "runtime",
+    "description": "UtenCore Standard Library — high-level wrappers over utencore native primitives",
+    "author": "Uten Core Contributors",
+    "bytecode_version": {
+        "min": 1,
+        "max": 2
+    }
+}

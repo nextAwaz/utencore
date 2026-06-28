@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "utencore-core",
+    "uc-binaries",
+    "compilers/py2uc",
+]
+
+[workspace.package]
+version = "0.0.5-alpha"
+edition = "2021"
+license = "MPL-2.0"
+authors = ["Uten Core Contributors"]

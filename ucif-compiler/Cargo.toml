@@ -1,0 +1,14 @@
+[package]
+name = "ucif-compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UCIF (UtenCore Interface) YAML-to-binary compiler"
+
+[dependencies]
+utencore = { path = "../utencore-core" }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+bincode = "1"
+clap = { version = "4", features = ["derive"] }
+log = "0.4"

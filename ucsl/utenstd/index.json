@@ -1,0 +1,14 @@
+{
+    "ucsl_version": 1,
+    "name": "utenstd",
+    "version": "0.0.5",
+    "description": "UtenCore Standard Library",
+    "exports": [
+        "math.sqrt", "math.sin", "math.cos", "math.tan",
+        "math.floor", "math.ceil", "math.round", "math.abs", "math.pow",
+        "math.pi", "math.e",
+        "io.read_file", "io.write_file", "io.read_line",
+        "sys.clock_ms", "sys.sleep"
+    ],
+    "dependencies": ["utencore"]
+}

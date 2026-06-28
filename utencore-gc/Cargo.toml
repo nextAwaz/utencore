@@ -1,0 +1,9 @@
+[package]
+name = "utencore-gc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Uten Core — garbage collection engine"
+
+[dependencies]
+utencore-types = { path = "../utencore-types" }
