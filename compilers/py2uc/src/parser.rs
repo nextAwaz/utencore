@@ -345,7 +345,7 @@ impl Parser {
         self.advance();
         let mut names = Vec::new();
         loop {
-            let n = self.name()?;
+            let n = self.dotted_name()?;
             let asn = if self.peek().kind == TokenKind::KwAs { self.advance(); Some(self.name()?) } else { None };
             names.push(Alias { name: n, asname: asn });
             if self.peek().kind == TokenKind::Comma { self.advance(); } else { break; }
@@ -357,8 +357,11 @@ impl Parser {
         self.advance();
         let mut level = 0;
         while self.peek().kind == TokenKind::Dot { level += 1; self.advance(); }
-        let module = if let TokenKind::Name(n) = &self.peek().kind { Some(n.clone()) } else { None };
-        if module.is_some() { self.advance(); }
+        let module = if matches!(self.peek().kind, TokenKind::Name(_)) {
+            Some(self.dotted_name()?)
+        } else {
+            None
+        };
         self.expect(TokenKind::KwImport, "from import")?;
         if self.peek().kind == TokenKind::Star {
             self.advance();
@@ -372,6 +375,18 @@ impl Parser {
             if self.peek().kind == TokenKind::Comma { self.advance(); } else { break; }
         }
         Ok(Stmt::ImportFrom { module, names, level })
+    }
+
+    /// Parse a dotted name: "foo.bar.baz"
+    fn dotted_name(&mut self) -> Result<String, String> {
+        let mut name = self.name()?;
+        while self.peek().kind == TokenKind::Dot {
+            self.advance();
+            let part = self.name()?;
+            name.push('.');
+            name.push_str(&part);
+        }
+        Ok(name)
     }
 
     fn name(&mut self) -> Result<String, String> {

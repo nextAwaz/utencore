@@ -16,9 +16,12 @@ use utencore_types::BYTECODE_VERSION;
 /// These are registered at VM startup so `import math` etc. work out of the box
 /// without needing separate .uclib files in the filesystem.
 const EMBEDDED_UCSL: &[(&str, &[u8])] = &[
-    ("math", include_bytes!("../../../ucsl/utenstd/math.uclib")),
-    ("io",   include_bytes!("../../../ucsl/utenstd/io.uclib")),
-    ("sys",  include_bytes!("../../../ucsl/utenstd/sys.uclib")),
+    // Embedded stdlib modules are built from src/stdlib/*.uclib
+    // These are minimal re-export stubs that map to utencore.* native functions.
+    // Real utenstd will be separate.
+    ("math", include_bytes!("../../../src/stdlib/math.uclib")),
+    ("io",   include_bytes!("../../../src/stdlib/io.uclib")),
+    ("sys",  include_bytes!("../../../src/stdlib/sys.uclib")),
 ];
 
 /// A VM-native function — Rust closure callable from bytecode.

@@ -290,10 +290,19 @@ fn stmt(s: &Stmt, c: &mut Ctx) {
         }
         Stmt::Import { names } => {
             for alias in names {
-                let sid = intern(&mut c.module, &alias.name);
+                // Full module path (might be dotted: "os.path")
+                let full_name = &alias.name;
+                let sid = intern(&mut c.module, full_name);
                 c.cur.push_op16(Opcode::Import, sid);
-                // Store module handle as a global so user can access it by name
-                c.cur.push_op16(Opcode::StoreGlobal, intern(&mut c.module, &alias.name));
+                // Binding: the name users access in code.
+                //   import foo      → global "foo" = Namespace(foo)
+                //   import foo.bar  → global "foo" = Namespace(foo.bar)
+                //   import foo.bar as x → global "x" = Namespace(foo.bar)
+                let bind_name = alias.asname.as_ref().map(|s| s.as_str()).unwrap_or_else(|| {
+                    // For dotted names, bind only the root name
+                    full_name.split('.').next().unwrap_or(full_name)
+                }).to_string();
+                c.cur.push_op16(Opcode::StoreGlobal, intern(&mut c.module, &bind_name));
             }
         }
         Stmt::ImportFrom { module: Some(module_name), names, level: _ } => {
