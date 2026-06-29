@@ -1,15 +1,15 @@
 //! Uten Core — A general-purpose stack-based language virtual machine.
 //!
-//! Universal stack machine VM for scripting languages. Provides ~130 opcodes,
+//! Universal stack machine VM for scripting languages. Provides ~120 opcodes,
 //! pluggable GC, LLVM JIT, CIB FFI bridge, and a plugin compiler system.
 
-#[path = "Ir.rs"]   pub mod ir;
-#[path = "Jit.rs"]  pub mod jit;
+pub mod ir;
+pub mod jit;
 pub mod vm;
 pub mod cib;
-#[path = "Plugin.rs"] pub mod plugin;
-#[path = "Ccis.rs"] pub mod ccis;
-#[path = "Ucsl.rs"] pub mod ucsl;
+pub mod plugin;
+pub mod ccis;
+pub mod ucsl;
 
 // Re-exports from sub-crates
 pub use utencore_types::*;
