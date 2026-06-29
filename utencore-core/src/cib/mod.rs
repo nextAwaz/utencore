@@ -11,10 +11,10 @@
 //! Cross-compiler: Compilers declare C deps via .ucif, CIB doesn't know
 //!   about Python/TS/Kotlin — only C types and calling conventions.
 
-pub mod ffi;
-pub mod marshal;
-pub mod structs;
-pub mod ucif;
+#[path = "Ffi.rs"]     pub mod ffi;
+#[path = "Marshal.rs"] pub mod marshal;
+#[path = "Structs.rs"] pub mod structs;
+#[path = "Ucif.rs"]    pub mod ucif;
 
 use std::collections::HashMap;
 use std::ffi::CString;

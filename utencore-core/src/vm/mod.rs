@@ -30,12 +30,13 @@ const EMBEDDED_UCSL: &[(&str, &[u8])] = &[
 pub struct VmNativeFn(pub Arc<dyn Fn(&mut Vm, &[UValue]) -> UtenResult<UValue> + Send + Sync>);
 
 /// Sub-modules (split for maintainability)
-pub mod dispatch;
-pub mod call;
-pub mod gc;
-pub mod ns;
-pub mod unsafe_;
-pub mod builtins;
+/// Files use PascalCase; mod names stay snake_case per Rust convention.
+#[path = "Dispatch.rs"]  pub mod dispatch;
+#[path = "Call.rs"]      pub mod call;
+#[path = "Gc.rs"]        pub mod gc;
+#[path = "Namespace.rs"] pub mod ns;
+#[path = "Unsafe.rs"]    pub mod unsafe_;
+#[path = "Builtins.rs"]  pub mod builtins;
 
 #[derive(Debug, Clone)]
 pub struct VmConfig {

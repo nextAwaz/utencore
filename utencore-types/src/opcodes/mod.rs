@@ -4,7 +4,7 @@
 
 use bitflags::bitflags;
 use std::fmt;
-pub mod info;
+#[path = "Info.rs"] pub mod info;
 pub use info::opcode_info;
 
 bitflags! {
