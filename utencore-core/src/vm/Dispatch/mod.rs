@@ -1464,58 +1464,7 @@ impl Vm {
                     _ => {}
                 }
             }
-            HasAttr => {
-                let target_sid = operand as StringId;
-                let obj = self.pop()?;
-                let found = match obj {
-                    UValue::Gc(h, ValueTag::Object) => {
-                        let mut result = false;
-                        if let HeapObject::Object { class_handle, fields, proto, .. } = self.gc.get(h) {
-                            let class_fields = match self.gc.get(*class_handle) {
-                                HeapObject::Class { fields: cf, .. } => cf.clone(),
-                                _ => vec![],
-                            };
-                            for (field_sid, _) in class_fields.iter().enumerate() {
-                                if field_sid as StringId == target_sid && field_sid < fields.len() && !matches!(fields[field_sid], UValue::Nil) {
-                                    result = true;
-                                    break;
-                                }
-                            }
-                            if !result {
-                                if let HeapObject::Class { methods, .. } = self.gc.get(*class_handle) {
-                                    result = methods.iter().any(|(sid, _)| *sid == target_sid);
-                                }
-                            }
-                            if !result {
-                                let mut current_proto = *proto;
-                                while let Some(ph) = current_proto {
-                                    if let HeapObject::Object { fields: pf, class_handle: pch, proto: pp, .. } = self.gc.get(ph) {
-                                        let pclass_fields = match self.gc.get(*pch) {
-                                            HeapObject::Class { fields: cf, .. } => cf.clone(),
-                                            _ => vec![],
-                                        };
-                                        for (field_sid, _) in pclass_fields.iter().enumerate() {
-                                            if field_sid as StringId == target_sid && field_sid < pf.len() && !matches!(pf[field_sid], UValue::Nil) {
-                                                result = true;
-                                                break;
-                                            }
-                                        }
-                                        if !result {
-                                            if let HeapObject::Class { methods, .. } = self.gc.get(*pch) {
-                                                result = methods.iter().any(|(sid, _)| *sid == target_sid);
-                                            }
-                                        }
-                                        if !result { current_proto = *pp; } else { break; }
-                                    } else { break; }
-                                }
-                            }
-                        }
-                        result
-                    }
-                    _ => false,
-                };
-                self.stack.push(UValue::Bool(found));
-            }
+            HasAttr => { self.op_has_attr(operand as StringId)?; }
             ClassAddField => {
                 let name_sid = operand;
                 let class_handle = self.pop_gc(ValueTag::Class)?;
@@ -1810,69 +1759,7 @@ impl Vm {
                     }
                 }
             }
-            CibCall => {
-                // Pop args in reverse, then fn ptr, call via libffi
-                let nargs = self.pop_int()?;
-                let mut args = Vec::with_capacity(nargs as usize);
-                for _ in 0..nargs { args.push(self.pop()?); }
-                args.reverse();
-                let func_val = self.pop()?;
-                match func_val {
-                    UValue::NativeFn(ref nh) => {
-                        // Legacy NativeFnHandle path — needs type info to call
-                        // For now, try to call via CibEngine's legacy call
-                        match self.cib.call(nh, &args) {
-                            Ok(v) => self.stack.push(v),
-                            Err(e) => {
-                                eprintln!("CIB call error: {e}");
-                                self.stack.push(UValue::Nil);
-                            }
-                        }
-                    }
-                    UValue::Gc(h, ValueTag::Opaque) => {
-                        // Opaque function pointer from CibSym — use DirectCall
-                        if let HeapObject::Opaque { data, .. } = self.gc.get(h) {
-                            let fn_ptr = usize::from_le_bytes(
-                                data[..8].try_into().unwrap_or([0u8; 8])
-                            );
-                            if fn_ptr == 0 {
-                                self.stack.push(UValue::Nil);
-                            } else {
-                                // Call with void args and void return (simplified)
-                                let ret_type = crate::cib::ffi::ffi_type_for(&crate::cib::marshal::CType::Void);
-                                let cif = match crate::cib::ffi::prepare_cif(
-                                    crate::cib::ffi::FfiAbi::DefaultAbi,
-                                    ret_type,
-                                    &[],
-                                ) {
-                                    Ok(cif) => cif,
-                                    Err(e) => {
-                                        eprintln!("CIB CIF prepare error: {e}");
-                                        self.stack.push(UValue::Nil);
-                                        return Ok(());
-                                    }
-                                };
-                                let mut ret_buf = [0u8; 8];
-                                let mut empty_args: [*mut std::ffi::c_void; 0] = [];
-                                unsafe {
-                                    crate::cib::ffi::call(
-                                        &cif, fn_ptr,
-                                        ret_buf.as_mut_ptr() as *mut std::ffi::c_void,
-                                        &mut empty_args,
-                                    );
-                                }
-                                self.stack.push(UValue::Int64(
-                                    i64::from_le_bytes(ret_buf)
-                                ));
-                            }
-                        } else { self.stack.push(UValue::Nil); }
-                    }
-                    _ => {
-                        eprintln!("CIB: expected function pointer, got {:?}", func_val.tag());
-                        self.stack.push(UValue::Nil);
-                    }
-                }
-            }
+            CibCall => { let nargs = self.pop_int()?; self.op_cib_call(nargs)?; }
             CibWrap => {
                 let ptr_val = self.pop_int()?;
                 let mid = self.current_module_id();
