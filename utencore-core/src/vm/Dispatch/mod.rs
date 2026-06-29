@@ -8,6 +8,8 @@ use crate::opcodes::{Opcode, OpFlags, opcode_info};
 use utencore_types::*;
 use super::*;
 
+mod helpers;
+
 impl Vm {
     pub(crate) fn dispatch(&mut self, op: Opcode, operand: u32) -> UtenResult<()> {
         // Reconstruct bytecode slice from raw pointer (for opcodes that need inline data access)

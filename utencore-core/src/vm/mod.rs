@@ -31,7 +31,7 @@ pub struct VmNativeFn(pub Arc<dyn Fn(&mut Vm, &[UValue]) -> UtenResult<UValue> +
 
 /// Sub-modules (split for maintainability)
 /// Files use PascalCase; mod names stay snake_case per Rust convention.
-#[path = "Dispatch.rs"]  pub mod dispatch;
+#[path = "Dispatch/mod.rs"]  pub mod dispatch;
 #[path = "Call.rs"]      pub mod call;
 #[path = "Gc.rs"]        pub mod gc;
 #[path = "Namespace.rs"] pub mod ns;
@@ -46,29 +46,22 @@ pub struct Vm {
     pub(crate) config: VmConfig,
     pub(crate) stack: Vec<UValue>,
     pub(crate) frames: Vec<CallFrame>,
-    pc: usize,
-    modules: Vec<LoadedModule>,
+    pub(crate) pc: usize,
+    pub(crate) modules: Vec<LoadedModule>,
     pub(crate) gc: Box<dyn GcEngine>,
     pub(crate) cib: CibEngine,
     pub(crate) plugin_mgr: PluginManager,
     pub(crate) loader: ModuleLoader,
-    running: bool,
-    allocation_count: u64,
+    pub(crate) running: bool,
+    pub(crate) allocation_count: u64,
     pub(crate) handlers: Vec<ExceptionHandler>,
-    /// Registry of native (Rust) functions callable from bytecode
     pub(crate) native_funcs: Vec<VmNativeFn>,
-    /// Name → index mapping for native functions (used by LoadNative opcode)
     pub(crate) native_func_names: HashMap<String, NativeFuncIdx>,
-    /// Namespace aliases: alias → target (e.g. "myns.ttt" → "foo.frr")
     pub(crate) ns_aliases: HashMap<String, String>,
-    // Current bytecode being executed — borrows from current function.
-    // NOT cloned per iteration. Stored as raw pointer + length.
-    current_bytecode_ptr: *const u8,
-    current_bytecode_len: usize,
-    // Recursion depth counter (checked against config.max_recursion)
-    call_depth: u32,
-    /// UCSL shared-library registry (lazily initialized on first import)
-    ucs_reg: Option<crate::ucsl::UcslRegistry>,
+    pub(crate) current_bytecode_ptr: *const u8,
+    pub(crate) current_bytecode_len: usize,
+    pub(crate) call_depth: u32,
+    pub(crate) ucs_reg: Option<crate::ucsl::UcslRegistry>,
 }
 
 #[derive(Clone)]
