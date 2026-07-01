@@ -6,5 +6,6 @@
 //! - Verification and loading utilities
 
 pub mod bytecode;
+pub mod tests;
 
 pub use bytecode::*;

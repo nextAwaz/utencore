@@ -9,6 +9,7 @@
 pub mod types;
 pub mod error;
 pub mod opcodes;
+pub mod tests;
 
 // Re-exports for convenience
 pub use types::*;

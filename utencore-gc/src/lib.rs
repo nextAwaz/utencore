@@ -3,6 +3,7 @@
 //! Pluggable GC with mark-sweep and reference-counting implementations.
 
 pub mod memory;
+pub mod tests;
 
 pub use memory::GcEngine;
 pub use memory::GcStats;
